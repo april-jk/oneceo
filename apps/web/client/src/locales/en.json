@@ -263,7 +263,8 @@
     "unsupportedFormat": "{{filename}} is not supported. Only text, document, and image attachments are allowed.",
     "sizeLimitExceeded": "{{name}} exceeds the 10 MB limit",
     "maxCountExceeded": "You can add at most {{count}} attachments",
-    "addedToWorkspace": "The following attachments were added and can be accessed directly in the workspace:\n{{lines}}"
+    "addedToWorkspace": "The following attachments were added and can be accessed directly in the workspace:\n{{lines}}",
+    "dropToUpload": "Release to upload files"
   },
   "attachmentPicker": {
     "triggerLabel": "Add attachment",
@@ -294,7 +295,25 @@
     "attached": "Attached",
     "skillsAndAttachments": "Skills and attachments",
     "attachments": "Attachments",
-    "itemCount": "{{count}} items"
+    "connectors": "Connectors",
+    "itemCount": "{{count}} items",
+    "preview": {
+      "kind": {
+        "image": "Image",
+        "text": "Text",
+        "pdf": "PDF",
+        "unsupported": "File"
+      },
+      "moreFiles": "View {{count}} more files",
+      "noSession": "This file preview is not available for the current session.",
+      "loading": "Reading file",
+      "notText": "This file is not directly previewable as text.",
+      "readFailed": "Failed to read file",
+      "truncated": "[Content is too long and has been truncated]",
+      "unsupportedTitle": "This file type does not support inline preview yet",
+      "unsupportedDescription": "Open the original file in the browser or a system app.",
+      "openOriginal": "Open original"
+    }
   },
   "taskDocumentsDialog": {
     "title": "Task deliverables",
@@ -532,6 +551,7 @@
   },
   "connectors": {
     "comingSoon": "Coming soon",
+    "loading": "Loading connectors",
     "featured": "Featured",
     "authorizedAccount": "Authorized account",
     "authorizedRepo": "Authorized repository",
@@ -661,7 +681,8 @@
       "reconnectConnector": "Reconnect {{name}}",
       "connectConnector": "Connect {{name}}",
       "reauthorize": "Reauthorize",
-      "startOauth": "Start OAuth"
+      "startOauth": "Start OAuth",
+      "retry": "Retry"
     },
     "badges": {
       "new": "New",
@@ -673,6 +694,7 @@
       "intro": "This release focuses on unifying the app connector directory, profile rules, and session attachment boundary.",
       "customMcpDetail": " Custom MCP creation forms and runtime assembly will be added in the next stage.",
       "createCustomMcp": "Create custom MCP",
+      "noCatalog": "Connector catalog is temporarily unavailable. Please try again later.",
       "noMatches": "No matching connectors found"
     },
     "targetBanner": {
@@ -901,7 +923,8 @@
     "title": "Task complete",
     "generatedCount": "{{count}} final deliverables generated",
     "downloadFailed": "Failed to download deliverable",
-    "download": "Download"
+    "download": "Download",
+    "viewAllFiles": "View all files in this task"
   },
   "deploymentPrompts": {
     "deploy": "Help me deploy the current project",

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { validatePptRenderInstruction } from '../src/services/ppt-render-instruction-validator';
+import { sanitizePptFileName, validatePptRenderInstruction } from '../src/services/ppt-render-instruction-validator';
 
 const validInstruction = {
   deck: {
@@ -82,6 +82,34 @@ test('validatePptRenderInstruction normalizes semantic page types from model out
   assert.equal((result.instruction.slides as any[])[2]?.originalPageType, 'usecase');
 });
 
+test('validatePptRenderInstruction aligns shared page type aliases with renderer page types', () => {
+  const result = validatePptRenderInstruction({
+    ...validInstruction,
+    deck: { ...validInstruction.deck, slideCount: 4 },
+    slides: [
+      validInstruction.slides[0],
+      { ...(validInstruction.slides[1] as any), pageType: 'toc', title: '目录' },
+      {
+        index: 3,
+        pageType: 'section_divider',
+        title: '第一部分',
+        coreMessage: '进入主体',
+      },
+      {
+        index: 4,
+        pageType: 'summary',
+        title: '总结',
+        coreMessage: '下一步行动',
+      },
+    ],
+  });
+
+  const slides = result.instruction.slides as any[];
+  assert.equal(slides[1]?.pageType, 'agenda');
+  assert.equal(slides[2]?.pageType, 'section-divider');
+  assert.equal(slides[3]?.pageType, 'closing');
+});
+
 test('validatePptRenderInstruction rejects slide count mismatch', () => {
   assert.throws(
     () =>
@@ -91,4 +119,8 @@ test('validatePptRenderInstruction rejects slide count mismatch', () => {
       }),
     /slideCount must match/
   );
+});
+
+test('sanitizePptFileName preserves unicode names for delivered ppt files', () => {
+  assert.equal(sanitizePptFileName('沐曦股份-投资价值分析.pptx'), '沐曦股份-投资价值分析.pptx');
 });

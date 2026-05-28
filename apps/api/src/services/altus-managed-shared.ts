@@ -771,7 +771,7 @@ export function buildManagedToolDefinitions() {
       function: {
         name: 'render_pptx_from_instructions',
         description:
-          'Render a PPTX file in the sandbox from a validated PptRenderInstruction after ppt-workflow has produced and reviewed the deck plan. Use only when the user wants a final PowerPoint file.',
+          'Render a PPTX file in the sandbox from a validated PptRenderInstruction after ppt-workflow has produced and reviewed the deck plan. Use only when the user wants a final PowerPoint file and no ppt-html-deck source has been created for this run.',
         parameters: objectSchema(
           {
             instructions: {
@@ -788,6 +788,35 @@ export function buildManagedToolDefinitions() {
             },
           },
           ['instructions']
+        ),
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'render_pptx_from_html_deck',
+        description:
+          'Render a final PPTX from a PPT-only HtmlDeckSpec plus a sandbox ppt-html-deck source project. The renderer wraps slide fragments with shared CSS from ppt-html-deck/index.html before exporting so the PPTX corresponds to the HTML source. This is not a website deployment or debug-browser workflow; use only when ppt-workflow is active and the user wants a PowerPoint file.',
+        parameters: objectSchema(
+          {
+            htmlDeckSpec: {
+              type: 'object',
+              description:
+                'HtmlDeckSpec object with taskType=ppt_html_deck, deck metadata, slides with safe htmlFile paths, sources, and openQuestions.',
+              properties: {},
+              required: [],
+              additionalProperties: true,
+            },
+            projectRoot: {
+              type: 'string',
+              description: 'Workspace-relative HTML deck project root. Defaults to ppt-html-deck.',
+            },
+            outputFileName: {
+              type: 'string',
+              description: 'Optional final .pptx filename, for example strategy-review.pptx.',
+            },
+          },
+          ['htmlDeckSpec']
         ),
       },
     },
@@ -847,7 +876,8 @@ export function buildManagedToolDefinitions() {
       type: 'function',
       function: {
         name: 'ask_user',
-        description: 'Ask the user one precise clarification question when blocked by missing requirements.',
+        description:
+          'Ask the user one precise clarification question when blocked by missing requirements. Use structuredClarification only for PPT / presentation brief cards.',
         parameters: objectSchema(
           {
             question: { type: 'string', description: 'The clarification question.' },
@@ -859,8 +889,54 @@ export function buildManagedToolDefinitions() {
             clarificationType: {
               type: 'string',
               description:
-                'Optional structured missing-requirement field: artifact_type, tech_stack, scope_boundary, integration_target, or acceptance_requirement.',
+                'Optional structured missing-requirement field: artifact_type, tech_stack, scope_boundary, integration_target, acceptance_requirement, or presentation_brief.',
             },
+            structuredClarification: objectSchema(
+              {
+                kind: { type: 'string', description: 'Must be structured_clarification.' },
+                taskType: { type: 'string', description: 'ppt, report, website, or generic.' },
+                title: { type: 'string', description: 'Short title for the choice-card flow.' },
+                summary: { type: 'string', description: 'Short reason for this clarification.' },
+                maxCards: { type: 'integer', description: 'Maximum card count. Must be 4 or less.' },
+                cards: {
+                  type: 'array',
+                  description:
+                    'At most 4 cards, each asking one decision. Each card should include 3 generated options; the fourth option is user-custom input rendered by the UI.',
+                  items: objectSchema(
+                    {
+                      id: { type: 'string' },
+                      title: { type: 'string' },
+                      question: { type: 'string' },
+                      why: { type: 'string' },
+                      selectionMode: { type: 'string', enum: ['single', 'multiple'] },
+                      required: { type: 'boolean' },
+                      allowOther: { type: 'boolean' },
+                      allowNote: { type: 'boolean', description: 'Use false; custom input is handled as the fourth option.' },
+                      notePlaceholder: { type: 'string' },
+                      options: {
+                        type: 'array',
+                        items: objectSchema(
+                          {
+                            id: { type: 'string' },
+                            label: { type: 'string' },
+                            description: { type: 'string' },
+                            impact: { type: 'string' },
+                            recommended: { type: 'boolean' },
+                          },
+                          ['id', 'label']
+                        ),
+                      },
+                    },
+                    ['id', 'title', 'question', 'selectionMode', 'options']
+                  ),
+                },
+                briefFields: {
+                  type: 'array',
+                  items: { type: 'string' },
+                },
+              },
+              ['kind', 'taskType', 'title', 'cards']
+            ),
           },
           ['question']
         ),

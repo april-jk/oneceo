@@ -2,6 +2,8 @@ import type { ManagedSkillCatalogEntry, ManagedSkillContext } from './altus-mana
 import type { SessionConnectorStatus } from './session-connector-service';
 import { classifyTaskIntentShape, type TaskClarificationType } from './task-intent-shape-service';
 import { altusManagedDynamicContextBlockService } from './altus-managed-dynamic-context-blocks';
+import type { StructuredClarificationCardPlan } from './altus-structured-clarification-service';
+import { derivePptGenerationContext, renderPptGenerationContext } from './ppt-archetype-routing-service';
 import {
   classifyPlatformCapabilityIntent,
   type PlatformCapabilityIntentDecision,
@@ -30,7 +32,16 @@ const PPT_CONTENT_ARCHETYPES = [
   'product_story',
 ] as const;
 
-const PPT_PAGE_TYPES = ['cover', 'toc', 'section_divider', 'content', 'summary'] as const;
+const PPT_PAGE_TYPES = [
+  'cover',
+  'agenda',
+  'section-divider',
+  'content',
+  'comparison',
+  'timeline',
+  'quote',
+  'closing',
+] as const;
 
 const PPT_CONTENT_SUBTYPES = [
   'text_enhanced',
@@ -64,7 +75,7 @@ const PPT_FONT_PAIRINGS = ['yahei_arial', 'yahei_calibri', 'yahei_cambria'] as c
 const PPT_QA_GATE_RULES = [
   'final_pptx_exists',
   'has_cover_page',
-  'has_summary_page',
+  'has_closing_page',
   'has_at_least_two_non_text_content_pages',
   'has_at_least_two_content_subtypes',
   'no_three_repeated_layouts_in_a_row',
@@ -228,9 +239,24 @@ const WEB_ARTIFACT_KEYWORDS = [
   'admin panel',
   'browser product',
 ] as const;
+const PRESENTATION_ARTIFACT_KEYWORDS = [
+  'ppt',
+  'pptx',
+  'powerpoint',
+  '演示文稿',
+  '幻灯片',
+  'slide deck',
+  'slides',
+  'presentation',
+] as const;
+const WEB_SOURCE_REFERENCE_ONLY_KEYWORDS = ['官网', '企业官网'] as const;
 
 function includesAnyKeyword(text: string, keywords: readonly string[]) {
   return keywords.some((keyword) => text.includes(keyword));
+}
+
+function countKeywordHits(text: string, keywords: readonly string[]) {
+  return keywords.reduce((count, keyword) => count + (text.includes(keyword) ? 1 : 0), 0);
 }
 
 function normalizeIntentTexts(texts: string[]) {
@@ -264,6 +290,7 @@ export type AltusManagedTaskIntentProfile = {
   clarificationQuestion: string;
   clarificationType: TaskClarificationType;
   clarificationOptions?: string[];
+  structuredClarification?: StructuredClarificationCardPlan;
   clarificationTransition?: {
     nextState: 'advisory' | 'ready_to_execute' | 'new_turn' | 'clarifying' | 'risk_confirmation';
     reason?: string;
@@ -288,13 +315,20 @@ export function deriveManagedTaskIntentProfile(texts: string[]): AltusManagedTas
 
   const latestExplicitNoDeploy = includesAnyKeyword(latest, EXPLICIT_NO_DEPLOY_KEYWORDS);
   const latestExplicitNoWeb = includesAnyKeyword(latest, EXPLICIT_NO_WEB_KEYWORDS);
-  const latestWebArtifact = includesAnyKeyword(latest, WEB_ARTIFACT_KEYWORDS);
+  const latestRawWebArtifact = includesAnyKeyword(latest, WEB_ARTIFACT_KEYWORDS);
+  const presentationArtifactRequested = includesAnyKeyword(combined, PRESENTATION_ARTIFACT_KEYWORDS);
+  const webSourceReferenceOnly =
+    presentationArtifactRequested &&
+    countKeywordHits(combined, WEB_ARTIFACT_KEYWORDS) ===
+      countKeywordHits(combined, WEB_SOURCE_REFERENCE_ONLY_KEYWORDS);
+  const latestWebArtifact = latestRawWebArtifact && !webSourceReferenceOnly;
   const latestCapabilityIntent = classifyPlatformCapabilityIntent(latest);
   const latestDeployRequest = latestCapabilityIntent.mode === 'execute';
 
   const explicitNoDeploy = includesAnyKeyword(combined, EXPLICIT_NO_DEPLOY_KEYWORDS);
   const explicitNoWeb = includesAnyKeyword(combined, EXPLICIT_NO_WEB_KEYWORDS);
-  const webArtifactRequested = includesAnyKeyword(combined, WEB_ARTIFACT_KEYWORDS);
+  const rawWebArtifactRequested = includesAnyKeyword(combined, WEB_ARTIFACT_KEYWORDS);
+  const webArtifactRequested = rawWebArtifactRequested && !webSourceReferenceOnly;
   const platformCapabilityIntent = classifyPlatformCapabilityIntent(texts);
   const deployRequested = platformCapabilityIntent.mode === 'execute';
   const scriptArtifactRequested = includesAnyKeyword(combined, SCRIPT_ARTIFACT_KEYWORDS);
@@ -335,6 +369,12 @@ export function deriveManagedTaskIntentProfile(texts: string[]): AltusManagedTas
 
   const needsClarification =
     intentShape.needsClarification || intentShape.candidateClarificationType !== 'none';
+  const clarificationQuestion =
+    intentShape.clarificationQuestion || intentShape.candidateClarificationQuestion;
+  const clarificationOptions =
+    intentShape.candidateClarificationOptions.length > 0
+      ? intentShape.candidateClarificationOptions
+      : undefined;
   const deployableWebAppBlueprintRequired =
     mode === 'deployable_web_app' &&
     !needsClarification &&
@@ -355,13 +395,9 @@ export function deriveManagedTaskIntentProfile(texts: string[]): AltusManagedTas
     emailTemplateRequested,
     deploymentAllowed,
     needsClarification,
-    clarificationQuestion:
-      intentShape.clarificationQuestion || intentShape.candidateClarificationQuestion,
+    clarificationQuestion,
     clarificationType: intentShape.candidateClarificationType,
-    clarificationOptions:
-      intentShape.candidateClarificationOptions.length > 0
-        ? intentShape.candidateClarificationOptions
-        : undefined,
+    clarificationOptions,
     todoRequired:
       intentShape.candidateTodoSignals.explicitTodoRequest ||
       intentShape.candidateTodoSignals.hasMultipleSubtasks ||
@@ -566,6 +602,29 @@ export class AltusManagedPromptService {
             '',
           ].join('\n')
         : '';
+    const structuredClarificationSection =
+      includeRuntimeState &&
+      taskIntentProfile?.needsClarification &&
+      taskIntentProfile.structuredClarification
+        ? [
+            '# Structured clarification card contract',
+            '- The current request is a PPT / presentation task that lacks enough decision-complete brief information.',
+            '- Your next action must be `ask_user`; do not call search, todowrite, render_pptx_from_instructions, shell_execute, or any execution tool first.',
+            '- Ask the user with structured choice cards, not a long free-text question or plain "需要补充信息" block.',
+            '- The card plan must contain at most 4 cards. Do not add a fifth question.',
+            '- Every card must be directly related to the user requested PPT topic, audience, source, depth, visual style, or content boundary.',
+            '- Do not ask abstract execution-preference questions such as "按推荐方案 / 快速推进 / 保证质量" unless the user request itself is about execution preference.',
+            '- If you adapt the cards, keep one decision per card.',
+            '- Each card must provide exactly 3 generated business options; the UI will render the fourth option as user-custom input.',
+            '- Set `allowOther=true` and `allowNote=false` on every card.',
+            '- Exactly one generated option per card should be recommended.',
+            '- Each option label and description must use user-facing business language, not tool names or implementation details.',
+            '- Pass the card plan in `structuredClarification` when calling `ask_user`.',
+            '- Baseline card plan you may adapt:',
+            JSON.stringify(taskIntentProfile.structuredClarification),
+            '',
+          ].join('\n')
+        : '';
     const clarificationTransitionSection =
       includeRuntimeState && taskIntentProfile?.clarificationTransition && !taskIntentProfile.needsClarification
         ? [
@@ -702,12 +761,13 @@ export class AltusManagedPromptService {
       '- If the user asks to 启动网站调试功能, open a debug page, or load a website in the debug view, use debug_open_page instead of free-form command text.',
       '- Treat website debugging as entry into a testing workflow, not as a visual-only action. Before the first debug_open_page call, write or update a workspace test document such as `docs/test-plan.md` with requirements, target flows, test cases, acceptance criteria, and a results section.',
       '- After the test document exists, explicitly enter the testing phase in your todo/progress: start or open the app, call debug_open_page, then run Playwright / playwright-mcp functional checks against the same n.eko Chromium session.',
-      '- For generated websites and web apps, after code implementation and run/build verification, tell progress as `正在进行视觉检测`, then use the n.eko + Playwright flow before final delivery.',
+      '- For generated websites, web apps, standalone HTML, or browser products only, after code implementation and run/build verification, tell progress as `正在进行视觉检测`, then use the n.eko + Playwright flow before final delivery.',
       '- During website debugging, expose concrete Playwright-backed browser actions with browser_interact instead of vague progress text: open the page with debug_open_page, then call browser_interact only for supported Playwright projections such as locator_click, text_click, coordinate_click, locator_fill, keyboard_type, keyboard_press, mouse_wheel, wait_for_locator, wait_for_text, wait_for_load_state, and wait_for_timeout. Set the browser_interact description to the exact user-visible action, for example `点击“新游戏”按钮`, `按下 ArrowUp 键`, `向下滚动页面`.',
       '- The functional test must cover the core user flows implied by the request, not only page reachability. Check visible content, navigation, key controls/forms/interactions, state changes, responsive layout when relevant, and obvious console/runtime failures.',
       '- If Playwright finds a defect, record the failure in the test document, return to repair with file/code tools, then rerun the affected tests and update the same test document with the retest result before completing.',
       '- For website debug tasks, if the target service is not running yet, start it first with shell_execute. Long-running preview/dev server commands are managed by shell_execute in runMode=auto/background_service; use the returned service.url with debug_open_page.',
       '- For standalone HTML deliverables already present in the workspace, call debug_open_page with the workspace file:// URL instead of trying to start a persistent local HTTP server through shell_execute.',
+      '- Do not use debug_open_page, browser_interact, website visual detection, or website debug workflow for PPTX/DOCX/XLSX/PDF/downloadable office deliverables. For PPTX tasks, the render report JSON is verification metadata, not a browser page; never open a `.render-report.json` path with debug_open_page.',
       '- Treat debug_open_page as successful only when the tool result succeeds. If debug_open_page reports target unreachable, bad HTTP status, or tab not ready, fix the local preview service/port and call debug_open_page again before telling the user the page is open.',
       '- After opening a page for debugging or after building a website/app, use Playwright / playwright-mcp by default to inspect or test the same n.eko Chromium session through CDP 9222. Do not launch a separate browser instance for this verification.',
       '- The sandbox browser defaults are fixed by the platform: `ONECEO_PLAYWRIGHT_CDP_URL=http://127.0.0.1:9222`, `PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright`, `NODE_PATH=/usr/local/lib/node_modules`, `playwright-mcp=/usr/local/bin/playwright-mcp`, `browser-use=/usr/local/bin/browser-use`, `browser-use venv=/opt/browser-use`, `neko=/usr/local/bin/neko`, and `n.eko static root=/opt/neko/client/dist`. Do not search for these paths, do not set NODE_PATH manually, do not run `npx playwright install`, and do not create ad-hoc screenshot scripts such as `screenshot-test.mjs` for visual evidence.',
@@ -732,6 +792,7 @@ export class AltusManagedPromptService {
       '- Do not broaden scope beyond the user request.',
       '- When using third-party libraries, start with stable imports and a minimal working script. Do not guess module paths, and do not build complex helper abstractions before a basic file can be generated successfully.',
       '- For PPT tasks that need current facts, examples, or visual assets, use web_search and web_extract instead of guessing.',
+      '- For PPT tasks, treat words like `官网` inside source instructions as research-source hints, not as a request to build or debug a website unless the user explicitly asks for a website/web app/HTML deliverable.',
       '- For DOCX tasks that depend on current facts, policies, examples, market references, or citations, use web_search and web_extract instead of inventing unsupported claims.',
       '- For XLSX tasks that depend on public data, benchmark data, current indicators, or external learning/resource links, use web_search and web_extract first, then organize the verified results into the workbook.',
       '- When you use external sources for a PPT, DOCX, or XLSX deliverable, preserve source URLs in an appendix slide, reference section, source sheet, notes area, or verification notes.',
@@ -742,6 +803,7 @@ export class AltusManagedPromptService {
       platformCapabilityAdvisorySection,
       clarificationGateSection,
       clarificationFocusSection,
+      structuredClarificationSection,
       clarificationTransitionSection,
       todoGateSection,
       webAppFastPathSection,
@@ -813,8 +875,9 @@ export class AltusManagedPromptService {
       '- Do not deliver a single flat worksheet as a finished workbook when the task clearly calls for structure, formulas, source sheets, or summaries.',
       '',
       '# Clarification rules',
-      '- If critical requirements are missing, call ask_user with one precise question.',
-      '- When calling ask_user for a missing requirement, include `clarificationType` when the question is about artifact type, tech stack, scope boundary, integration target, or acceptance requirement.',
+      '- If critical non-PPT requirements are missing, call ask_user with one precise question.',
+      '- For PPT / presentation brief clarification only, call ask_user with `structuredClarification` cards.',
+      '- When calling ask_user for a missing requirement, include `clarificationType` when the question is about artifact type, tech stack, scope boundary, integration target, acceptance requirement, or presentation brief.',
       '- Do not ask unnecessary questions when a reasonable next step is clear.',
       '- For requests like "generate a PPT/docx/xlsx on topic X", you already have enough information to start. Use reasonable defaults and proceed instead of asking a generic meta-question.',
       '- Do not ask generic office-flow questions such as "Do you want to create or modify a PPT?" when the user request already clearly asks to create one.',
@@ -904,10 +967,11 @@ export class AltusManagedPromptService {
         '',
         '# Clarification gate',
         '- The current request is under-specified and requires clarification before execution.',
-        `- Ask exactly this focused question: ${profile.clarificationQuestion}`,
+        `- Use this focused question as the primary card question: ${profile.clarificationQuestion}`,
         ...(Array.isArray(profile.clarificationOptions) && profile.clarificationOptions.length > 0
           ? [`- Suggested options: ${profile.clarificationOptions.join(' | ')}`]
           : []),
+        '- Present the clarification through structured choice cards, not as a plain text prompt.',
         '- Do not start execution before the user answers.'
       );
     }
@@ -923,6 +987,16 @@ export class AltusManagedPromptService {
           ? [`- Accepted assumptions: ${profile.clarificationTransition.assumptions.join(' | ')}`]
           : [])
       );
+    }
+
+    if (profile && !profile.needsClarification) {
+      const latestUserMessage = profile.recentUserMessages[profile.recentUserMessages.length - 1];
+      const pptGenerationContext = latestUserMessage
+        ? derivePptGenerationContext([latestUserMessage])
+        : null;
+      if (pptGenerationContext) {
+        lines.push('', renderPptGenerationContext(pptGenerationContext));
+      }
     }
 
     if (profile && !profile.needsClarification) {
@@ -962,7 +1036,7 @@ export class AltusManagedPromptService {
       '- Treat each skill body below as task-specific operating instructions unless it conflicts with higher-priority system rules.',
       '- Skill identity is carried by sourceType, skillId, and revisionId. Do not rely on slug alone.',
       hasPptWorkflow
-        ? '- For PPTX delivery, finish the ppt-workflow planning and preflight first, then call `render_pptx_from_instructions` with the final `PptRenderInstruction`; include the returned `.pptx` path in `complete_task.attachments`. Do not create PPTX through python-pptx, shell scripts, or manual office-generation code while ppt-workflow is active.'
+        ? '- For PPTX delivery, finish the ppt-workflow planning and preflight first, then use the PPT-only HTML deck path: write `ppt-html-deck/`, call `render_pptx_from_html_deck`, and include the returned `.pptx` path in `complete_task.attachments`. Once `ppt-html-deck/` exists or `render_pptx_from_html_deck` has been attempted, do not fall back to `render_pptx_from_instructions`; repair the HTML deck/export issue so the final PPTX corresponds to the HTML source. Do not deploy the HTML deck, inject analytics, use website debug tools, or create PPTX through python-pptx, shell scripts, or manual office-generation code while ppt-workflow is active.'
         : '',
       '',
       ...(includeBlockIndex ? [blockIndex, ''] : []),

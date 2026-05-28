@@ -185,6 +185,20 @@ export function shouldDeferPendingSessionRouteSync(input: {
   return false;
 }
 
+export function buildBoundSessionRoute(input: {
+  sessionId?: string | null;
+  search?: string | null;
+}): string {
+  const sessionId = asText(input.sessionId);
+  if (!sessionId) return '';
+  const params = new URLSearchParams(typeof input.search === 'string' ? input.search : '');
+  params.delete('new');
+  params.delete('sessionId');
+  const query = params.toString();
+  const base = `/session/${encodeURIComponent(sessionId)}`;
+  return query ? `${base}?${query}` : base;
+}
+
 function extractOrchestratorSessionId(message: AgentMessage): string | null {
   const candidate = message?.metadata?.orchestratorSessionId;
   return typeof candidate === 'string' && candidate.trim() ? candidate.trim() : null;
@@ -269,6 +283,23 @@ function toRecord(value: unknown): Record<string, unknown> {
     if (Object.keys(parsed).length > 0) return parsed;
   }
   return {};
+}
+
+function hasStructuredClarificationPlan(metadataRaw: unknown): boolean {
+  const metadata = toRecord(metadataRaw);
+  if (toRecord(metadata.structuredClarification).kind === 'structured_clarification') {
+    return true;
+  }
+  return toRecord(toRecord(metadata.result).structuredClarification).kind === 'structured_clarification';
+}
+
+function isPresentationBriefClarificationAwaitingCards(message: AgentMessage): boolean {
+  if (message.type !== 'clarification_request') return false;
+  const metadata = toRecord(message.metadata);
+  return (
+    asText(metadata.clarificationType) === 'presentation_brief' &&
+    !hasStructuredClarificationPlan(metadata)
+  );
 }
 
 function asText(value: unknown): string {
@@ -1225,6 +1256,13 @@ export function deriveSessionStateFromMessages(messages: AgentMessage[]): {
   }
 
   const clarification = relevantMessages[lastClarificationIndex];
+  if (clarification && isPresentationBriefClarificationAwaitingCards(clarification)) {
+    return {
+      stopProcessing: Boolean(lastStopMessage),
+      runtimeStatus: lastTerminalMessage ? resolveTerminalMessageOutcome(lastTerminalMessage) : null,
+      currentQuestion: null,
+    };
+  }
   const hasUserResponseAfter = relevantMessages
     .slice(lastClarificationIndex + 1)
     .some((message) => message.type === 'user_response');
@@ -1243,7 +1281,10 @@ export function deriveSessionStateFromMessages(messages: AgentMessage[]): {
 }
 
 export function shouldStopProcessingForMessage(message: AgentMessage): boolean {
-  if (message.type === 'clarification_request' || message.type === 'plan_generated') {
+  if (message.type === 'clarification_request') {
+    return !isPresentationBriefClarificationAwaitingCards(message);
+  }
+  if (message.type === 'plan_generated') {
     return true;
   }
 
@@ -1568,6 +1609,44 @@ function normalizeAgentMessageIdentity(message: AgentMessage): AgentMessage {
       messageKey,
     },
   };
+}
+
+function resolveAgentMessageTimelineCursor(message: Partial<AgentMessage>): number | null {
+  const metadata = toRecord(message.metadata);
+  return (
+    asPositiveInt((message as { timelineCursor?: unknown }).timelineCursor) ??
+    asPositiveInt(metadata.timelineCursor) ??
+    asPositiveInt(metadata.sessionEventSeq) ??
+    asPositiveInt(metadata.timestamp)
+  );
+}
+
+function orderAgentMessagesByTimeline(messages: AgentMessage[]): AgentMessage[] {
+  const indexed = messages.map((message, index) => ({
+    message,
+    index,
+    cursor: resolveAgentMessageTimelineCursor(message),
+  }));
+  const hasSortablePair = indexed.some((left, leftIndex) =>
+    indexed.some(
+      (right, rightIndex) =>
+        rightIndex > leftIndex &&
+        left.cursor !== null &&
+        right.cursor !== null &&
+        left.cursor !== right.cursor
+    )
+  );
+  if (!hasSortablePair) {
+    return messages;
+  }
+  return indexed
+    .sort((left, right) => {
+      if (left.cursor !== null && right.cursor !== null && left.cursor !== right.cursor) {
+        return left.cursor - right.cursor;
+      }
+      return left.index - right.index;
+    })
+    .map((item) => item.message);
 }
 
 function isManagedAssistantMessage(message: Partial<AgentMessage>): boolean {
@@ -2006,12 +2085,12 @@ export function mergeRealtimeMessage(
       };
       return next;
     }
-    return [...prev, message];
+    return orderAgentMessagesByTimeline([...prev, message]);
   }
   if (message.type === 'opencode_event' && isNonTextPartEvent(metadata)) {
     const streamKey = resolveStreamKeyFromMetadata(metadata);
     if (!streamKey) {
-      return [...prev, message];
+      return orderAgentMessagesByTimeline([...prev, message]);
     }
 
     const idx = prev.findIndex((item) => {
@@ -2038,12 +2117,12 @@ export function mergeRealtimeMessage(
       return next;
     }
 
-    return [...prev, message];
+    return orderAgentMessagesByTimeline([...prev, message]);
   }
   if (message.type === 'opencode_event' && isTextStreamEvent(metadata, message.content)) {
     const streamKey = resolveTextStreamKeyFromMetadata(metadata);
     if (!streamKey) {
-      return [...prev, message];
+      return orderAgentMessagesByTimeline([...prev, message]);
     }
 
     const idx = prev.findIndex((item) => {
@@ -2076,19 +2155,19 @@ export function mergeRealtimeMessage(
       return next;
     }
 
-    return [...prev, message];
+    return orderAgentMessagesByTimeline([...prev, message]);
   }
 
   if (message.type === 'opencode_event' && asText(metadata.eventType) === 'message.final') {
     const finalStreamKey = resolveTextStreamKeyFromMetadata(metadata);
     if (!finalStreamKey) {
-      return [...prev, message];
+      return orderAgentMessagesByTimeline([...prev, message]);
     }
     const filtered = prev.filter((item) => {
       if (item.type !== 'opencode_event') return true;
       return resolveAgentMessageKey(item) !== messageKey;
     });
-    return [...filtered, message];
+    return orderAgentMessagesByTimeline([...filtered, message]);
   }
 
   if (message.type === 'status_update' && isTerminalOpencodeMessage(message)) {
@@ -2105,10 +2184,10 @@ export function mergeRealtimeMessage(
     if (exists) {
       return prev;
     }
-    return [...prev, message];
+    return orderAgentMessagesByTimeline([...prev, message]);
   }
 
-  return [...prev, message];
+  return orderAgentMessagesByTimeline([...prev, message]);
 }
 
 function compactHistoryMessages(list: TaskCreationHistoryMessage[]): TaskCreationHistoryMessage[] {
@@ -2358,7 +2437,7 @@ export function mergeHistoryAgentMessages(base: AgentMessage[], incoming: AgentM
     indexByKey.set(key, merged.length);
     merged.push(item);
   }
-  return merged;
+  return orderAgentMessagesByTimeline(merged);
 }
 
 export function reconcileHistoryWithPendingLocalMessages(
@@ -2569,7 +2648,12 @@ export function primeOptimisticHistoryViewCache(input: {
 }
 
 function mapHistoryMessageToAgentMessage(item: TaskCreationHistoryMessage, historySessionId: string): AgentMessage | null {
-  const metadata = item?.metadata || {};
+  const metadata: Record<string, unknown> = {
+    ...(item?.metadata || {}),
+    ...(asPositiveInt(item?.timelineCursor) !== null && asPositiveInt(toRecord(item?.metadata).timelineCursor) === null
+      ? { timelineCursor: asPositiveInt(item?.timelineCursor) }
+      : {}),
+  };
   const messageType = item?.messageType;
   const role = item?.role;
   const id = item?.id;
@@ -2845,7 +2929,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
   }, [initialProjectIdForNewSession, sessionId]);
   const [isInterrupting, setIsInterrupting] = useState(false);
   const [pendingSandboxPromptVersion, setPendingSandboxPromptVersion] = useState(0);
-  const [location] = useLocation();
+  const [location, setLocation] = useLocation();
   const search = useSearch();
   const { user } = useAuth();
 
@@ -3104,13 +3188,15 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
     const currentMatch = currentPath.match(/^\/session\/([^/?#]+)/);
     const currentInPath = currentMatch ? decodeURIComponent(currentMatch[1]) : '';
     if (currentInPath !== nextSessionId || params.get('new') || params.get('sessionId')) {
-      params.delete('new');
-      params.delete('sessionId');
-      const query = params.toString();
-      const base = `/session/${encodeURIComponent(nextSessionId)}`;
-      window.history.replaceState(null, '', query ? `${base}?${query}` : base);
+      setLocation(
+        buildBoundSessionRoute({
+          sessionId: nextSessionId,
+          search: window.location.search,
+        }),
+        { replace: true }
+      );
     }
-  }, []);
+  }, [setLocation]);
 
   useEffect(() => {
     const routeState = resolveSessionRouteState({
@@ -3567,17 +3653,20 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         const options = Array.isArray(rawOptions)
           ? rawOptions.map((item) => asText(item)).filter(Boolean)
           : [];
+        const awaitingPresentationCards =
+          asText(baseMetadata.clarificationType) === 'presentation_brief' &&
+          !hasStructuredClarificationPlan(baseMetadata);
         setCurrentQuestion(
-          question
+          !awaitingPresentationCards && question
             ? {
                 question,
                 options: options.length > 0 ? options : undefined,
               }
             : null
         );
-        setIsProcessing(false);
-        setManagedRunStreaming(false);
-        setManagedRunStatus('waiting_user');
+        setIsProcessing(awaitingPresentationCards);
+        setManagedRunStreaming(awaitingPresentationCards);
+        setManagedRunStatus(awaitingPresentationCards ? 'in_progress' : 'waiting_user');
         if (sessionKey) {
           void loadHistoryRef.current(sessionKey, { reason: 'managed_recovery' });
         }
@@ -4420,6 +4509,9 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
   const normalizeHistoryMessages = useCallback(
     (historySessionId: string, list: TaskCreationHistoryMessage[]) => {
       const ordered = [...list].sort((a, b) => {
+        const ca = asPositiveInt((a as { timelineCursor?: unknown })?.timelineCursor) ?? asPositiveInt(toRecord(a?.metadata).timelineCursor);
+        const cb = asPositiveInt((b as { timelineCursor?: unknown })?.timelineCursor) ?? asPositiveInt(toRecord(b?.metadata).timelineCursor);
+        if (ca !== null && cb !== null && ca !== cb) return ca - cb;
         const sa = asPositiveInt(toRecord(a?.metadata).sessionEventSeq);
         const sb = asPositiveInt(toRecord(b?.metadata).sessionEventSeq);
         if (sa !== null && sb !== null && sa !== sb) return sa - sb;

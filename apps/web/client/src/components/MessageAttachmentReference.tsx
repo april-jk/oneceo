@@ -1,138 +1,252 @@
-import { FileText, Paperclip, Wrench } from "lucide-react";
+import { FileText, Link2, MoreHorizontal, Wrench } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
 import type {
   TaskCreationPlatformSkill,
   TaskCreationUploadedAttachment as UploadedTaskAttachment,
 } from "@/lib/task-creation-client";
+import type { TaskCreationMcpReference } from "@/lib/task-input-metadata";
 import { formatAttachmentSize } from "@/lib/task-attachments";
+import { getSkillDisplayName } from "@/lib/skill-display-name";
 import { cn } from "@/lib/utils";
 
-type MessageAttachmentReferenceProps = {
+type MessageReferenceTone = "default" | "inverse";
+
+type MessageInlineReferencesProps = {
   skills?: TaskCreationPlatformSkill[];
-  attachments?: UploadedTaskAttachment[];
-  tone?: "default" | "inverse";
+  mcpReferences?: TaskCreationMcpReference[];
+  tone?: MessageReferenceTone;
   className?: string;
 };
 
-function buildReferenceSummary(
-  skills: TaskCreationPlatformSkill[],
-  attachments: UploadedTaskAttachment[],
-  t: ReturnType<typeof useTranslation>["t"],
+type MessageAttachmentFilesProps = {
+  attachments?: UploadedTaskAttachment[];
+  sessionId?: string | null;
+  className?: string;
+};
+
+type LegacyMessageAttachmentReferenceProps = MessageInlineReferencesProps &
+  MessageAttachmentFilesProps;
+
+function buildAttachmentKey(attachment: UploadedTaskAttachment, index: number) {
+  return `${attachment.path || attachment.name}:${attachment.size}:${index}`;
+}
+
+function formatAttachmentMeta(attachment: UploadedTaskAttachment) {
+  return Number.isFinite(attachment.size) && attachment.size > 0
+    ? formatAttachmentSize(attachment.size)
+    : "";
+}
+
+function renderAttachmentFile(
+  attachment: UploadedTaskAttachment,
+  index: number,
+  variant: "tile" | "row" = "tile",
 ) {
-  if (skills.length && attachments.length) return t("messageAttachmentReference.skillsAndAttachments");
-  if (skills.length) return "Skills";
-  return t("messageAttachmentReference.attachments");
+  const meta = formatAttachmentMeta(attachment);
+  const filename = attachment.name || attachment.path;
+  if (variant === "row") {
+    return (
+      <div
+        key={buildAttachmentKey(attachment, index)}
+        className="flex min-w-0 items-center gap-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5"
+        title={filename}
+      >
+        <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-slate-900 text-white">
+          <FileText className="h-4 w-4" />
+        </span>
+        <span className="min-w-0 flex-1 truncate text-sm font-medium text-slate-800">
+          {filename}
+        </span>
+        {meta ? (
+          <span className="shrink-0 text-xs font-medium text-slate-400">
+            {meta}
+          </span>
+        ) : null}
+      </div>
+    );
+  }
+
+  return (
+    <div
+      key={buildAttachmentKey(attachment, index)}
+      className="flex h-16 w-40 shrink-0 items-center gap-2.5 rounded-xl border border-slate-200 bg-slate-50 px-3 text-left text-xs text-slate-700 shadow-[0_1px_0_rgba(15,23,42,0.04)]"
+      title={filename}
+    >
+      <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-slate-900 text-white shadow-sm">
+        <FileText className="h-4 w-4" />
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-[12px] font-semibold leading-4 text-slate-800">
+          {filename}
+        </span>
+        {meta ? (
+          <span className="mt-0.5 block text-[11px] font-medium leading-none text-slate-400">
+            {meta}
+          </span>
+        ) : null}
+      </span>
+    </div>
+  );
+}
+
+export function MessageInlineReferences({
+  skills = [],
+  mcpReferences = [],
+  tone = "default",
+  className,
+}: MessageInlineReferencesProps) {
+  const { t } = useTranslation();
+  if (skills.length === 0 && mcpReferences.length === 0) return null;
+
+  const labelClass =
+    tone === "inverse" ? "text-white/55" : "text-muted-foreground";
+  const skillClass =
+    tone === "inverse" ? "text-emerald-200" : "text-emerald-700";
+  const connectorClass = tone === "inverse" ? "text-sky-200" : "text-sky-700";
+
+  return (
+    <div
+      className={cn(
+        "flex flex-wrap items-center gap-x-2 gap-y-1 text-xs leading-5",
+        className,
+      )}
+    >
+      {skills.length ? (
+        <span className="inline-flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1">
+          <Wrench className={cn("h-3.5 w-3.5 shrink-0", skillClass)} />
+          <span className={labelClass}>Skills</span>
+          {skills.map((skill, index) => (
+            <span
+              key={`${skill.skillId}:${skill.revisionId}:${index}`}
+              className={cn("font-semibold", skillClass)}
+              title={skill.name}
+            >
+              {getSkillDisplayName(skill)}
+              {index < skills.length - 1 ? "," : ""}
+            </span>
+          ))}
+        </span>
+      ) : null}
+
+      {skills.length && mcpReferences.length ? (
+        <span className={labelClass}>·</span>
+      ) : null}
+
+      {mcpReferences.length ? (
+        <span className="inline-flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1">
+          <Link2 className={cn("h-3.5 w-3.5 shrink-0", connectorClass)} />
+          <span className={labelClass}>
+            {t("messageAttachmentReference.connectors")}
+          </span>
+          {mcpReferences.map((reference, index) => (
+            <span
+              key={`${reference.key}:${reference.name}:${index}`}
+              className={cn("font-semibold", connectorClass)}
+            >
+              {reference.name || reference.key}
+              {index < mcpReferences.length - 1 ? "," : ""}
+            </span>
+          ))}
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
+export function MessageAttachmentFiles({
+  attachments = [],
+  className,
+}: MessageAttachmentFilesProps) {
+  const { t } = useTranslation();
+  if (attachments.length === 0) return null;
+
+  const visibleAttachments = attachments.slice(0, 2);
+  const hiddenAttachments = attachments.slice(2);
+
+  return (
+    <>
+      <div
+        className={cn(
+          "flex max-w-full items-center justify-end gap-2 overflow-visible",
+          className,
+        )}
+      >
+        {visibleAttachments.map((attachment, index) =>
+          renderAttachmentFile(attachment, index),
+        )}
+        {hiddenAttachments.length ? (
+          <Dialog>
+            <DialogTrigger asChild>
+              <button
+                type="button"
+                className="group flex h-16 w-14 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-slate-50 text-sm font-semibold text-slate-600 shadow-[0_1px_0_rgba(15,23,42,0.04)] transition-colors hover:border-slate-300 hover:bg-white hover:text-slate-900"
+                aria-label={t("messageAttachmentReference.preview.moreFiles", {
+                  count: hiddenAttachments.length,
+                })}
+              >
+                <span className="text-sm group-hover:hidden">
+                  +{hiddenAttachments.length}
+                </span>
+                <MoreHorizontal className="hidden h-4 w-4 group-hover:block" />
+              </button>
+            </DialogTrigger>
+            <DialogContent className="max-w-xl rounded-xl border-slate-200 p-0 shadow-2xl">
+              <DialogHeader className="border-b border-slate-200 px-5 py-4">
+                <DialogTitle className="text-base">
+                  {t("messageAttachmentReference.attachments")}
+                </DialogTitle>
+                <DialogDescription className="text-xs">
+                  {t("messageAttachmentReference.itemCount", {
+                    count: attachments.length,
+                  })}
+                </DialogDescription>
+              </DialogHeader>
+              <div className="max-h-[22rem] space-y-2 overflow-y-auto p-4">
+                {attachments.map((attachment, index) =>
+                  renderAttachmentFile(attachment, index, "row"),
+                )}
+              </div>
+            </DialogContent>
+          </Dialog>
+        ) : null}
+      </div>
+    </>
+  );
 }
 
 export default function MessageAttachmentReference({
   skills = [],
   attachments = [],
+  mcpReferences = [],
+  sessionId,
   tone = "default",
   className,
-}: MessageAttachmentReferenceProps) {
-  const { t } = useTranslation();
-  if (skills.length === 0 && attachments.length === 0) return null;
-
-  const inverse = tone === "inverse";
-  const containerClass = inverse
-    ? "border-white/18 bg-white/10 text-white"
-    : "border-slate-200/90 bg-slate-50/90 text-slate-900";
-  const accentClass = inverse ? "bg-white/70" : "bg-slate-400";
-  const titleClass = inverse ? "text-white/72" : "text-slate-500";
-  const summaryClass = inverse ? "text-white" : "text-slate-900";
-  const sectionLabelClass = inverse ? "text-white/78" : "text-slate-600";
-  const itemClass = inverse
-    ? "border-white/12 bg-white/8 text-white"
-    : "border-slate-200/80 bg-white/80 text-slate-900";
-  const metaClass = inverse ? "text-white/60" : "text-slate-500";
+}: LegacyMessageAttachmentReferenceProps) {
+  if (
+    skills.length === 0 &&
+    attachments.length === 0 &&
+    mcpReferences.length === 0
+  ) {
+    return null;
+  }
 
   return (
-    <div
-      className={cn(
-        "relative overflow-hidden rounded-2xl border px-3 py-2.5",
-        containerClass,
-        className,
-      )}
-    >
-      <div className={cn("absolute inset-y-2 left-0.5 w-0.5 rounded-full", accentClass)} />
-      <div className="pl-2">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <div className={cn("text-[10px] font-semibold uppercase tracking-[0.24em]", titleClass)}>
-              {t("messageAttachmentReference.attached")}
-            </div>
-            <div className={cn("mt-1 text-sm font-semibold", summaryClass)}>
-              {buildReferenceSummary(skills, attachments, t)}
-            </div>
-          </div>
-          <div className={cn("shrink-0 text-[11px]", metaClass)}>
-            {t("messageAttachmentReference.itemCount", {
-              count: skills.length + attachments.length,
-            })}
-          </div>
-        </div>
-
-        <div className="mt-3 space-y-2">
-          {skills.length ? (
-            <div className="space-y-1.5">
-              <div className={cn("flex items-center gap-1.5 text-[11px] font-medium", sectionLabelClass)}>
-                <Wrench className="h-3.5 w-3.5" />
-                <span>Skills</span>
-                <span className={metaClass}>· {skills.length}</span>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                {skills.map((skill) => (
-                  <div
-                    key={`${skill.skillId}:${skill.revisionId}`}
-                    className={cn(
-                      "inline-flex max-w-full items-center gap-2 rounded-full border px-2.5 py-1.5 text-xs",
-                      itemClass,
-                    )}
-                  >
-                    <Wrench className="h-3.5 w-3.5 shrink-0" />
-                    <span className="truncate font-medium">{skill.name}</span>
-                    {skill.revisionNumber !== null ? (
-                      <span className={cn("shrink-0 text-[11px]", metaClass)}>
-                        rev.{skill.revisionNumber}
-                      </span>
-                    ) : null}
-                  </div>
-                ))}
-              </div>
-            </div>
-          ) : null}
-
-          {attachments.length ? (
-            <div className="space-y-1.5">
-              <div className={cn("flex items-center gap-1.5 text-[11px] font-medium", sectionLabelClass)}>
-                <Paperclip className="h-3.5 w-3.5" />
-                <span>{t("messageAttachmentReference.attachments")}</span>
-                <span className={metaClass}>· {attachments.length}</span>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                {attachments.map((attachment) => (
-                  <div
-                    key={`${attachment.path || attachment.name}:${attachment.size}`}
-                    className={cn(
-                      "inline-flex max-w-full items-center gap-2 rounded-full border px-2.5 py-1.5 text-xs",
-                      itemClass,
-                    )}
-                  >
-                    <FileText className="h-3.5 w-3.5 shrink-0" />
-                    <span className="truncate font-medium">{attachment.name || attachment.path}</span>
-                    {Number.isFinite(attachment.size) && attachment.size > 0 ? (
-                      <span className={cn("shrink-0 text-[11px]", metaClass)}>
-                        {formatAttachmentSize(attachment.size)}
-                      </span>
-                    ) : null}
-                  </div>
-                ))}
-              </div>
-            </div>
-          ) : null}
-        </div>
-      </div>
+    <div className={cn("space-y-2", className)}>
+      <MessageInlineReferences
+        skills={skills}
+        mcpReferences={mcpReferences}
+        tone={tone}
+      />
+      <MessageAttachmentFiles attachments={attachments} sessionId={sessionId} />
     </div>
   );
 }

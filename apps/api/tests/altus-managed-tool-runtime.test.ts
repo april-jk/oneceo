@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import { afterEach, mock, test } from 'node:test';
 import { e2bConnector } from '../src/connectors/e2b-connector';
-import { AltusManagedToolRuntime } from '../src/services/altus-managed-tool-runtime';
+import {
+  AltusManagedToolRuntime,
+  __altusManagedToolRuntimeTestHooks,
+} from '../src/services/altus-managed-tool-runtime';
 import { sandboxSkillSyncService } from '../src/services/sandbox-skill-sync-service';
 import { connectorGuideService } from '../src/services/connector-guide-service';
 import { osacAgentService } from '../src/services/osac-agent-service';
@@ -215,6 +218,87 @@ test('render_pptx_from_instructions requires active ppt-workflow skill', async (
   );
 });
 
+test('render_pptx_from_html_deck requires active ppt-workflow skill', async () => {
+  const runtime = new AltusManagedToolRuntime({
+    sessionId: 'session-1',
+    userId: 'user-1',
+    sandboxId: 'sandbox-1',
+    workspaceRoot: '/workspace/session-1',
+    activeSkills: [],
+  });
+
+  await assert.rejects(
+    runtime.execute('render_pptx_from_html_deck', {
+      htmlDeckSpec: {},
+    }),
+    /render_pptx_from_html_deck_ppt_workflow_not_active/
+  );
+});
+
+test('render_pptx_from_html_deck returns renderer result for active ppt workflow', async () => {
+  const renderMock = mock.method(pptRenderToolService, 'renderHtmlDeck', async () => ({
+    status: 'completed',
+    pptxPath: 'ppt-html-deck/export/strategy-review.pptx',
+    reportPath: 'ppt-html-deck/export/export-report.json',
+    visualQaReportPath: 'ppt-html-deck/export/visual-qa-report.json',
+    htmlManifestPath: 'ppt-html-deck/manifest.json',
+    slideCount: 2,
+    warnings: [],
+    repairHints: [],
+  }) as any);
+  const markDirtyMock = mock.fn(async () => undefined);
+  const runtime = new AltusManagedToolRuntime(
+    {
+      sessionId: 'session-1',
+      userId: 'user-1',
+      sandboxId: 'sandbox-1',
+      workspaceRoot: '/workspace/session-1',
+      activeSkills: [
+        {
+          sourceType: 'platform',
+          skillId: 'skill-ppt-workflow',
+          revisionId: 'rev-ppt-workflow',
+          slug: 'ppt-workflow',
+          name: 'PPT 工作流',
+          description: 'PPT 子任务编排',
+          category: 'office',
+          renderedMarkdown: '# Skill Brief',
+          revisionNumber: 2,
+          resourceSummary: null,
+        },
+      ],
+    },
+    {
+      touchSandbox: async () => undefined,
+      markSandboxDirty: markDirtyMock,
+    }
+  );
+
+  const result = await runtime.execute('render_pptx_from_html_deck', {
+    htmlDeckSpec: {
+      taskType: 'ppt_html_deck',
+      deck: { title: '战略复盘', slideCount: 1, outputFileName: 'strategy-review.pptx' },
+      slides: [{ id: 'slide-1', index: 1, slideArchetype: 'cover', htmlFile: 'slides/001-cover.html' }],
+    },
+    projectRoot: 'ppt-html-deck',
+  });
+
+  assert.equal(renderMock.mock.callCount(), 1);
+  assert.equal(markDirtyMock.mock.callCount(), 1);
+  assert.equal(result.type, 'result');
+  const payload = JSON.parse(result.content);
+  assert.equal(payload.pptxPath, 'ppt-html-deck/export/strategy-review.pptx');
+  assert.equal(payload.visualQaReportPath, 'ppt-html-deck/export/visual-qa-report.json');
+  assert.match(
+    result.terminalInstruction || '',
+    /complete_task now with attachments=\[\{"path":"ppt-html-deck\/export\/strategy-review\.pptx"\}\]/
+  );
+  await assert.rejects(
+    runtime.execute('shell_execute', { command: 'ls ppt-html-deck/export' }),
+    /ppt_workflow_render_completed_complete_task_required:ppt-html-deck\/export\/strategy-review\.pptx/
+  );
+});
+
 test('render_pptx_from_instructions returns renderer result for active ppt workflow', async () => {
   const renderMock = mock.method(pptRenderToolService, 'render', async () => ({
     status: 'completed',
@@ -268,6 +352,134 @@ test('render_pptx_from_instructions returns renderer result for active ppt workf
   const payload = JSON.parse(result.content);
   assert.equal(payload.pptxPath, 'deliverables/career-plan.pptx');
   assert.equal(payload.slideCount, 5);
+  assert.match(
+    result.terminalInstruction || '',
+    /complete_task now with attachments=\[\{"path":"deliverables\/career-plan\.pptx"\}\]/
+  );
+  await assert.rejects(
+    runtime.execute('read_file', { path: 'deliverables/career-plan.render-report.json' }),
+    /ppt_workflow_render_completed_complete_task_required:deliverables\/career-plan\.pptx/
+  );
+});
+
+test('render_pptx_from_instructions is blocked after ppt-html-deck source is written', async () => {
+  const renderMock = mock.method(pptRenderToolService, 'render', async () => ({
+    status: 'completed',
+    pptxPath: 'deliverables/career-plan.pptx',
+    reportPath: 'deliverables/career-plan.render-report.json',
+    slideCount: 5,
+    warnings: [],
+    repairHints: [],
+  }) as any);
+  mock.method(e2bConnector, 'runCommand', async () => ({
+    stdout: '',
+    stderr: '',
+    exitCode: 0,
+  }) as any);
+  mock.method(e2bConnector, 'writeFile', async () => undefined);
+  const runtime = new AltusManagedToolRuntime(
+    {
+      sessionId: 'session-1',
+      userId: 'user-1',
+      sandboxId: 'sandbox-1',
+      workspaceRoot: '/workspace/session-1',
+      activeSkills: [
+        {
+          sourceType: 'platform',
+          skillId: 'skill-ppt-workflow',
+          revisionId: 'rev-ppt-workflow',
+          slug: 'ppt-workflow',
+          name: 'PPT 工作流',
+          description: 'PPT 子任务编排',
+          category: 'office',
+          renderedMarkdown: '# Skill Brief',
+          revisionNumber: 2,
+          resourceSummary: null,
+        },
+      ],
+    },
+    {
+      touchSandbox: async () => undefined,
+      markSandboxDirty: async () => undefined,
+    }
+  );
+
+  await runtime.execute('write_file', {
+    path: 'ppt-html-deck/slides/001-cover.html',
+    content: '<section class="slide" data-slide-id="slide-1" data-slide-index="1">Cover</section>',
+  });
+
+  await assert.rejects(
+    runtime.execute('render_pptx_from_instructions', {
+      instructions: {
+        deck: { title: '职业规划', slideCount: 1, fileName: 'career-plan.pptx' },
+        theme: { colorTokens: { background: '#ffffff', primary: '#0969da', text: '#1f2328' } },
+        slides: [{ index: 1, pageType: 'cover', title: '职业规划', coreMessage: '从探索到落地' }],
+        sources: [],
+        openQuestions: [],
+      },
+    }),
+    /render_pptx_from_instructions_blocked_after_html_deck_source/
+  );
+  assert.equal(renderMock.mock.callCount(), 0);
+});
+
+test('complete_task rejects stale instruction-rendered pptx after html deck render was attempted', async () => {
+  mock.method(pptRenderToolService, 'renderHtmlDeck', async () => ({
+    status: 'failed',
+    stage: 'visual_qa',
+    reportPath: 'ppt-html-deck/export/export-report.json',
+    visualQaReportPath: 'ppt-html-deck/export/visual-qa-report.json',
+    warnings: [],
+    repairHints: [],
+    errors: ['slide_stylesheet_missing'],
+  }) as any);
+  const runtime = new AltusManagedToolRuntime(
+    {
+      sessionId: 'session-1',
+      userId: 'user-1',
+      sandboxId: 'sandbox-1',
+      workspaceRoot: '/workspace/session-1',
+      activeSkills: [
+        {
+          sourceType: 'platform',
+          skillId: 'skill-ppt-workflow',
+          revisionId: 'rev-ppt-workflow',
+          slug: 'ppt-workflow',
+          name: 'PPT 工作流',
+          description: 'PPT 子任务编排',
+          category: 'office',
+          renderedMarkdown: '# Skill Brief',
+          revisionNumber: 2,
+          resourceSummary: null,
+        },
+      ],
+    },
+    {
+      touchSandbox: async () => undefined,
+      markSandboxDirty: async () => undefined,
+    }
+  );
+
+  const renderedInstructionPathSet = (runtime as any).renderedPptxAttachmentPaths as Set<string>;
+  renderedInstructionPathSet.add('deliverables/career-plan.pptx');
+
+  await runtime.execute('render_pptx_from_html_deck', {
+    htmlDeckSpec: {
+      taskType: 'ppt_html_deck',
+      deck: { title: '战略复盘', slideCount: 1, outputFileName: 'strategy-review.pptx' },
+      slides: [{ id: 'slide-1', index: 1, slideArchetype: 'cover', htmlFile: 'slides/001-cover.html' }],
+    },
+    projectRoot: 'ppt-html-deck',
+  });
+
+  await assert.rejects(
+    runtime.execute('complete_task', {
+      summary: '已生成 PPT',
+      attachments: [{ path: 'deliverables/career-plan.pptx' }],
+    }),
+    /complete_task_pptx_requires_render_pptx_from_html_deck/
+  );
 });
 
 test('complete_task rejects pptx attachments that bypass ppt workflow renderer', async () => {
@@ -298,6 +510,68 @@ test('complete_task rejects pptx attachments that bypass ppt workflow renderer',
       attachments: [{ path: 'openai-codex-introduction.pptx' }],
     }),
     /complete_task_pptx_requires_render_pptx_from_instructions/
+  );
+});
+
+test('complete_task rejects ppt workflow completion without a pptx attachment', async () => {
+  const runtime = new AltusManagedToolRuntime({
+    sessionId: 'session-1',
+    userId: 'user-1',
+    sandboxId: 'sandbox-1',
+    workspaceRoot: '/workspace/session-1',
+    activeSkills: [
+      {
+        sourceType: 'platform',
+        skillId: 'skill-ppt-workflow',
+        revisionId: 'rev-ppt-workflow',
+        slug: 'ppt-workflow',
+        name: 'PPT 工作流',
+        description: 'PPT 子任务编排',
+        category: 'office',
+        renderedMarkdown: '# Skill Brief',
+        revisionNumber: 2,
+        resourceSummary: null,
+      },
+    ],
+  });
+
+  await assert.rejects(
+    runtime.execute('complete_task', {
+      summary: '已生成 PPT',
+      attachments: [{ path: 'ppt-html-deck/export/export-report.json' }],
+    }),
+    /complete_task_pptx_requires_render_pptx_from_html_deck/
+  );
+});
+
+test('complete_task rejects ppt html deck source attachments', async () => {
+  const runtime = new AltusManagedToolRuntime({
+    sessionId: 'session-1',
+    userId: 'user-1',
+    sandboxId: 'sandbox-1',
+    workspaceRoot: '/workspace/session-1',
+    activeSkills: [
+      {
+        sourceType: 'platform',
+        skillId: 'skill-ppt-workflow',
+        revisionId: 'rev-ppt-workflow',
+        slug: 'ppt-workflow',
+        name: 'PPT 工作流',
+        description: 'PPT 子任务编排',
+        category: 'office',
+        renderedMarkdown: '# Skill Brief',
+        revisionNumber: 2,
+        resourceSummary: null,
+      },
+    ],
+  });
+
+  await assert.rejects(
+    runtime.execute('complete_task', {
+      summary: '已生成 PPT',
+      attachments: [{ path: 'ppt-html-deck/slides/001-cover.html' }],
+    }),
+    /complete_task_pptx_requires_render_pptx_from_html_deck/
   );
 });
 
@@ -457,6 +731,41 @@ test('tool result envelope steers binary deliverables away from write_file', () 
   assert.equal(payload.status, 'error');
   assert.match(payload.error, /write_file only supports UTF-8 text files/i);
   assert.match(payload.instruction, /Do not use write_file/i);
+});
+
+test('tool result envelope stops PPT loops after html deck renderer path is chosen', () => {
+  const envelope = buildManagedToolResultEnvelope({
+    status: 'error',
+    runId: 'run-1',
+    toolUseId: 'tool-ppt',
+    toolName: 'render_pptx_from_instructions',
+    modelRoundId: 'round-1',
+    args: {},
+    errorMessage: 'render_pptx_from_instructions_blocked_after_html_deck_source',
+  });
+
+  assert.equal(envelope.errorCode, 'render_pptx_from_instructions_blocked_after_html_deck_source');
+  assert.equal(envelope.retryable, false);
+  const payload = JSON.parse(envelope.contentForModel);
+  assert.match(payload.instruction, /Use the PPTX already returned by render_pptx_from_html_deck in complete_task\.attachments/);
+});
+
+test('tool result envelope requires complete_task immediately after PPT render completed', () => {
+  const envelope = buildManagedToolResultEnvelope({
+    status: 'error',
+    runId: 'run-1',
+    toolUseId: 'tool-shell',
+    toolName: 'shell_execute',
+    modelRoundId: 'round-1',
+    args: { command: 'ls ppt-html-deck/export' },
+    errorMessage: 'ppt_workflow_render_completed_complete_task_required:ppt-html-deck/export/deck.pptx',
+  });
+
+  assert.equal(envelope.errorCode, 'ppt_workflow_render_completed_complete_task_required');
+  assert.equal(envelope.retryable, false);
+  const payload = JSON.parse(envelope.contentForModel);
+  assert.match(payload.error, /renderer has already produced the final PPTX/i);
+  assert.match(payload.instruction, /Call complete_task now with the PPTX path returned by the renderer/i);
 });
 
 test('tool result envelope classifies Playwright CDP open failures as debug browser failures', () => {
@@ -3074,4 +3383,38 @@ test('ask_user preserves structured clarification type for pending state', async
     throw new Error('expected ask_user result');
   }
   assert.equal(result.clarificationType, 'artifact_type');
+  assert.equal(result.structuredClarification, undefined);
+});
+
+test('ask_user attaches presentation structured clarification fallback when model omits cards', async () => {
+  const runtime = new AltusManagedToolRuntime({
+    sessionId: 'session-ask-user-presentation-brief',
+    userId: 'user-1',
+    sandboxId: 'sandbox-1',
+    workspaceRoot: '/workspace/session-ask-user-presentation-brief',
+    activeSkills: [],
+    mcpProviders: [],
+  });
+
+  const result = await runtime.execute('ask_user', {
+    question: '这份 PPT 开始制作前，先确认 4 个关键决策。你可以直接选择，也可以跳过由 Altus 按推荐项处理。',
+    clarificationType: 'presentation_brief',
+  });
+
+  assert.equal(result.type, 'ask_user');
+  if (result.type !== 'ask_user') {
+    throw new Error('expected ask_user result');
+  }
+  assert.equal(result.structuredClarification?.kind, 'structured_clarification');
+  assert.equal(result.structuredClarification?.taskType, 'ppt');
+  assert.equal(result.structuredClarification?.cards.length, 4);
+});
+
+test('ask_user detects presentation structured clarification fallback from question text', () => {
+  const plan = __altusManagedToolRuntimeTestHooks.resolveAskUserStructuredClarification({
+    question: '这份 PPT 开始制作前，先确认 4 个关键决策。你可以直接选择，也可以跳过由 Altus 按推荐项处理。',
+  });
+
+  assert.equal(plan?.kind, 'structured_clarification');
+  assert.equal(plan?.cards.length, 4);
 });

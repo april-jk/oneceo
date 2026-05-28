@@ -29,6 +29,13 @@ import {
 } from './altus-clarification-policy-reducer';
 import { altusClarificationTransitionAgent } from './altus-clarification-transition-agent';
 import {
+  buildPresentationBriefClarificationQuestion,
+  buildPresentationStructuredClarificationPlan,
+  coversPresentationBrief,
+  shouldRequestPresentationBrief,
+  type StructuredClarificationCardPlan,
+} from './altus-structured-clarification-service';
+import {
   altusManagedContextService,
   buildManagedConversationEntries,
 } from './altus-managed-context-service';
@@ -217,6 +224,7 @@ type FinalClarificationDecision = {
   clarificationType: TaskClarificationType;
   clarificationQuestion: string;
   clarificationOptions?: string[];
+  structuredClarification?: StructuredClarificationCardPlan;
 };
 
 type TransitionResolvedProfileInput = {
@@ -310,6 +318,8 @@ function coversClarificationType(
       return coversIntegrationTarget(text);
     case 'acceptance_requirement':
       return coversAcceptanceRequirement(text);
+    case 'presentation_brief':
+      return coversPresentationBrief(text);
     default:
       return false;
   }
@@ -344,7 +354,23 @@ function buildClarificationQuestion(
         question: `${followUpPrefix}这次只需要源码，还是还需要本地可运行、测试通过，或可以直接部署？`,
         options: options || [...ACCEPTANCE_REQUIREMENT_OPTIONS],
       };
+    case 'presentation_brief':
+      return {
+        question: `${followUpPrefix}${buildPresentationBriefClarificationQuestion()}`,
+      };
   }
+}
+
+function buildStructuredClarificationFallback(input: {
+  clarificationType: TaskClarificationType;
+  question: string;
+  options?: string[];
+  userRequest?: string;
+}): StructuredClarificationCardPlan | undefined {
+  if (input.clarificationType === 'presentation_brief') {
+    return buildPresentationStructuredClarificationPlan({ userRequest: input.userRequest || input.question });
+  }
+  return undefined;
 }
 
 async function pathExists(targetPath: string) {
@@ -553,10 +579,29 @@ function resolveClarificationDecision(input: {
       clarificationType: pendingType,
       clarificationQuestion: followUp.question,
       clarificationOptions: followUp.options,
+      structuredClarification: buildStructuredClarificationFallback({
+        clarificationType: pendingType,
+        question: followUp.question,
+        options: followUp.options,
+        userRequest: combinedText,
+      }),
     };
   }
 
   const candidates: Array<Exclude<TaskClarificationType, 'none'>> = [];
+  const needsPresentationBrief =
+    shouldRequestPresentationBrief(combinedText) && !coversPresentationBrief(combinedText);
+  if (needsPresentationBrief) {
+    const question = buildClarificationQuestion('presentation_brief');
+    return {
+      needsClarification: true,
+      clarificationType: 'presentation_brief',
+      clarificationQuestion: question.question,
+      clarificationOptions: question.options,
+      structuredClarification: buildPresentationStructuredClarificationPlan({ userRequest: combinedText }),
+    };
+  }
+
   const needsArtifactClarification =
     softwareRequest &&
     (input.shape.boundaryOnlySoftwareRequest ||
@@ -618,6 +663,12 @@ function resolveClarificationDecision(input: {
       clarificationType,
       clarificationQuestion: question.question,
       clarificationOptions: question.options,
+      structuredClarification: buildStructuredClarificationFallback({
+        clarificationType,
+        question: question.question,
+        options: question.options,
+        userRequest: combinedText,
+      }),
     };
   }
 
@@ -710,13 +761,20 @@ function buildProfileFromTransition(input: TransitionResolvedProfileInput): Altu
     ? ''
     : input.reduced.question;
   if (!input.reduced.accepted) {
+    const clarificationType = input.reduced.clarificationType || input.shape.candidateClarificationType || 'none';
     return {
       ...input.baseProfile,
       ...input.todoDecision,
       needsClarification: true,
-      clarificationType: input.reduced.clarificationType || input.shape.candidateClarificationType || 'none',
+      clarificationType,
       clarificationQuestion: fallbackQuestion,
       clarificationOptions: input.reduced.options,
+      structuredClarification: buildStructuredClarificationFallback({
+        clarificationType,
+        question: fallbackQuestion,
+        options: input.reduced.options,
+        userRequest: input.texts.join('\n'),
+      }),
       clarificationTransition: {
         nextState: input.reduced.nextState,
         reason: input.reduced.reason,
@@ -725,13 +783,21 @@ function buildProfileFromTransition(input: TransitionResolvedProfileInput): Altu
   }
 
   if (input.reduced.nextState === 'clarifying') {
+    const clarificationType = input.reduced.clarificationType || input.shape.candidateClarificationType || 'none';
+    const clarificationQuestion = input.reduced.question || input.shape.candidateClarificationQuestion;
     return {
       ...input.baseProfile,
       ...input.todoDecision,
       needsClarification: true,
-      clarificationType: input.reduced.clarificationType || input.shape.candidateClarificationType || 'none',
-      clarificationQuestion: input.reduced.question || input.shape.candidateClarificationQuestion,
+      clarificationType,
+      clarificationQuestion,
       clarificationOptions: input.reduced.options,
+      structuredClarification: buildStructuredClarificationFallback({
+        clarificationType,
+        question: clarificationQuestion,
+        options: input.reduced.options,
+        userRequest: input.texts.join('\n'),
+      }),
       clarificationTransition: {
         nextState: 'clarifying',
         reason: input.reduced.reason,
@@ -1533,6 +1599,7 @@ export class AltusManagedSetupService {
       clarificationType: clarificationDecision.clarificationType,
       clarificationQuestion: clarificationDecision.clarificationQuestion,
       clarificationOptions: clarificationDecision.clarificationOptions,
+      structuredClarification: clarificationDecision.structuredClarification,
     };
   }
 

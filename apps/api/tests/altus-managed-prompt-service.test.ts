@@ -43,6 +43,63 @@ test('managed prompt treats task grading as descriptive language and uses taskIn
   assert.match(prompt, /After a clarification answer arrives, reassess the request from scratch/i);
 });
 
+test('managed prompt requires structured ask_user cards for presentation brief clarification', () => {
+  const profile = deriveManagedTaskIntentProfile(['帮我分析一下沐曦股份，做个 ppt']);
+  const prompt = altusManagedPromptService.buildSystemPrompt({
+    sessionId: 'session-ppt-structured-clarification',
+    sessionTitle: 'ppt clarification',
+    workspaceRoot: '/workspace/session-ppt-structured-clarification',
+    connectors: [],
+    taskIntentProfile: {
+      ...profile,
+      needsClarification: true,
+      clarificationType: 'presentation_brief',
+      clarificationQuestion: '这份 PPT 开始制作前，先确认 4 个关键决策。',
+      structuredClarification: {
+        kind: 'structured_clarification',
+        taskType: 'ppt',
+        title: '生成 PPT 前确认 4 个关键决策',
+        summary: '先确认关键 brief。',
+        maxCards: 4,
+        briefFields: ['purpose_audience'],
+        cards: [
+          {
+            id: 'purpose_audience',
+            title: '演示目的与受众',
+            question: '这份 PPT 主要给谁看？',
+            why: '决定叙事角度',
+            selectionMode: 'single',
+            required: true,
+            allowOther: true,
+            allowNote: true,
+            options: [
+              {
+                id: 'investor_pitch',
+                label: '投资人融资路演',
+                description: '强调投资价值',
+                impact: '突出市场和融资用途。',
+                recommended: true,
+              },
+              {
+                id: 'executive_strategy',
+                label: '内部高管战略汇报',
+                description: '强调战略判断',
+                impact: '突出风险和资源投入。',
+              },
+            ],
+          },
+        ],
+      },
+    },
+  });
+
+  assert.match(prompt, /Structured clarification card contract/);
+  assert.match(prompt, /Your next action must be `ask_user`/);
+  assert.match(prompt, /at most 4 cards/);
+  assert.match(prompt, /structuredClarification/);
+  assert.match(prompt, /演示目的与受众/);
+});
+
 test('managed prompt explicitly skips pre-execution todo for simple tasks when taskIntentProfile says no', () => {
   const prompt = altusManagedPromptService.buildSystemPrompt({
     sessionId: 'session-simple-task-test',
@@ -86,6 +143,67 @@ test('runtime context uses stable current date instead of per-turn timestamp', (
   assert.doesNotMatch(prompt, /Current time:/);
 });
 
+test('runtime context injects PPT generation contract only for PPT tasks', () => {
+  const pptProfile = deriveManagedTaskIntentProfile([
+    '帮我分析一下沐曦股份，做个 ppt',
+    [
+      '已确认需求（结构化澄清选择）',
+      '- 演示目的与受众：内部高管战略汇报',
+      '- 内容来源与可信度：官网、公告、权威媒体优先',
+      '- 深度与页数：12-15 页标准版',
+      '- 视觉与叙事风格：科技投研风',
+    ].join('\n'),
+  ]);
+  const pptPrompt = altusManagedPromptService.buildRuntimeContextPrompt({
+    sessionId: 'session-ppt-context',
+    sessionTitle: 'ppt context',
+    workspaceRoot: '/workspace/session-ppt-context',
+    connectors: [],
+    taskIntentProfile: {
+      ...pptProfile,
+      needsClarification: false,
+      clarificationType: 'none',
+      clarificationQuestion: '',
+    },
+  });
+
+  assert.match(pptPrompt, /# PPT generation contract/);
+  assert.match(pptPrompt, /Deck archetype: internal_strategy_review/);
+  assert.match(pptPrompt, /decision_options/);
+  assert.match(pptPrompt, /Source coverage guidance \(quality preference, not a blocking gate\)/);
+  assert.match(pptPrompt, /web_extract/);
+  assert.match(pptPrompt, /Search result snippets are discovery signals/);
+  assert.match(pptPrompt, /Source coverage is not allowed to block final delivery/);
+  assert.doesNotMatch(pptPrompt, /ask_or_use_of_funds/);
+
+  const nonPptPrompt = altusManagedPromptService.buildRuntimeContextPrompt({
+    sessionId: 'session-web-context',
+    sessionTitle: 'web context',
+    workspaceRoot: '/workspace/session-web-context',
+    connectors: [],
+    taskIntentProfile: deriveManagedTaskIntentProfile(['请帮我做一个企业官网']),
+  });
+
+  assert.doesNotMatch(nonPptPrompt, /# PPT generation contract/);
+});
+
+test('runtime context does not leak old PPT contract into a later website turn', () => {
+  const profile = deriveManagedTaskIntentProfile([
+    '帮我分析一下沐曦股份，做个 ppt',
+    '请帮我做一个企业官网',
+  ]);
+  const prompt = altusManagedPromptService.buildRuntimeContextPrompt({
+    sessionId: 'session-ppt-then-web',
+    sessionTitle: 'ppt then web',
+    workspaceRoot: '/workspace/session-ppt-then-web',
+    connectors: [],
+    taskIntentProfile: profile,
+  });
+
+  assert.doesNotMatch(prompt, /# PPT generation contract/);
+  assert.match(prompt, /# Todo gate/);
+});
+
 test('managed prompt defaults debug and testing to Playwright on the same n.eko browser', () => {
   const prompt = altusManagedPromptService.buildSystemPrompt({
     sessionId: 'session-debug-tool-choice',
@@ -117,6 +235,8 @@ test('managed prompt defaults debug and testing to Playwright on the same n.eko 
   assert.match(prompt, /do not create ad-hoc screenshot scripts such as `screenshot-test\.mjs`/i);
   assert.match(prompt, /required screenshot evidence comes from platform tool results/i);
   assert.match(prompt, /captured as a Playwright screenshot and attached to the corresponding Action/i);
+  assert.match(prompt, /never open a `\.render-report\.json` path with debug_open_page/i);
+  assert.match(prompt, /words like `官网` inside source instructions as research-source hints/i);
   assert.match(prompt, /Do not launch a separate browser instance/i);
   assert.match(prompt, /not about:blank, a Chrome error page, or an unexpected fallback route/i);
   assert.match(prompt, /Use Browser Use for exploratory external-site access and interaction only/i);
@@ -155,6 +275,25 @@ test('managed task intent keeps website source-only no-deploy requests on the we
   assert.equal(profile.todoReason, 'deployable_web_app_blueprint');
 });
 
+test('managed task intent keeps PPT official-site source hints out of web app path', () => {
+  const profile = deriveManagedTaskIntentProfile([
+    '帮我分析一下 沐熙股份，做个 ppt',
+    [
+      '已确认需求（结构化澄清选择）',
+      '来源：沐熙股份 PPT 制作前确认关键决策',
+      '- 演示目的与受众：企业品牌与业务推介',
+      '- 内容来源与可信度：官网、公告、权威媒体优先',
+      '- 深度与页数：12-15 页标准版',
+      '- 视觉与叙事风格：科技投研风',
+      '请基于以上 confirmed brief 先规划，再执行任务。',
+    ].join('\n'),
+  ]);
+
+  assert.notEqual(profile.mode, 'deployable_web_app');
+  assert.equal(profile.webArtifactRequested, false);
+  assert.equal(profile.todoReason, 'none');
+});
+
 test('managed task intent profile carries a hard clarification gate for broad business-system requests', () => {
   const profile = deriveManagedTaskIntentProfile([
     '帮我做一个企业管理系统。',
@@ -165,6 +304,7 @@ test('managed task intent profile carries a hard clarification gate for broad bu
   assert.match(profile.clarificationQuestion, /核心模块/);
   assert.match(profile.clarificationQuestion, /源码/);
   assert.match(profile.clarificationQuestion, /部署/);
+  assert.equal(profile.structuredClarification, undefined);
   assert.equal(profile.todoRequired, false);
   assert.equal(profile.todoReason, 'none');
 
@@ -180,6 +320,7 @@ test('managed task intent profile carries a hard clarification gate for broad bu
   assert.match(prompt, /Your next step must be `ask_user`/i);
   assert.match(prompt, /Do not call `todowrite`/i);
   assert.match(prompt, /Active clarification type/i);
+  assert.doesNotMatch(prompt, /Structured clarification card contract/i);
 });
 
 test('managed prompt does not expose legacy direct PPT workflow globally', () => {
@@ -626,6 +767,8 @@ test('managed prompt includes full ppt workflow instructions when skill is activ
   assert.match(prompt, /# Skill Brief: PPT 子任务编排工作流/);
   assert.match(prompt, /ppt_intent_analyzer/);
   assert.match(prompt, /PptRenderInstructionDraft/);
+  assert.match(prompt, /render_pptx_from_html_deck/);
+  assert.match(prompt, /Do not deploy the HTML deck/);
 });
 
 test('managed prompt can append auto-attached skill instructions after a governed tool call', () => {

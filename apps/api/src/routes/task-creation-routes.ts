@@ -11,6 +11,7 @@ import {
   appUserLegacyIdMappingDAO,
   sandboxExecutionEnvironmentDAO,
   taskCreationSessionDAO,
+  taskSessionMcpToolConfirmationDAO,
   taskSessionRunDAO,
   taskSessionWorkspaceCacheDAO,
 } from '../db/dao';
@@ -75,6 +76,7 @@ import { taskCreationProjectRedisCacheService } from '../services/task-creation-
 import { taskSessionDeploymentRedisCacheService } from '../services/task-session-deployment-redis-cache-service';
 import { altusManagedRunService } from '../services/altus-managed-run-service';
 import { buildManagedMcpToolConfirmationMetadata } from '../services/managed-mcp-tool-confirmation';
+import { buildPresentationStructuredClarificationPlan } from '../services/altus-structured-clarification-service';
 import { isLegacyClientUserId, isSameUserId, normalizeUserId } from '../utils/user-id';
 
 const router = express.Router();
@@ -2541,6 +2543,12 @@ function asTimelineCursor(value: unknown): number | null {
 
 function resolveMessageTimelineCursor(message: any): number {
   const metadata = pickRecord(message?.metadata);
+  const topLevelTimelineCursor = asTimelineCursor(message?.timelineCursor);
+  if (topLevelTimelineCursor !== null) return topLevelTimelineCursor;
+
+  const metadataTimelineCursor = asTimelineCursor(metadata.timelineCursor);
+  if (metadataTimelineCursor !== null) return metadataTimelineCursor;
+
   const sessionEventSeq = asPositiveInt(metadata.sessionEventSeq);
   if (sessionEventSeq !== null) return sessionEventSeq;
 
@@ -2596,6 +2604,10 @@ function sanitizeTimelineMetadataForClient(metadataRaw: unknown): Record<string,
     'runId',
     'sessionId',
     'executionMode',
+    'question',
+    'options',
+    'clarificationType',
+    'structuredClarification',
     'deliverables',
     'verification',
     'streamKey',
@@ -3108,8 +3120,42 @@ type TimelineMessage = {
   messageType: string;
   content: string;
   metadata?: Record<string, unknown>;
+  timelineCursor?: number | null;
   createdAt: string;
 };
+
+function isLegacyPresentationBriefClarification(input: {
+  messageType?: string | null;
+  content?: string | null;
+  metadata: Record<string, unknown>;
+}) {
+  if (input.messageType !== 'clarification_request') return false;
+  if (
+    asText(input.metadata.clarificationType) ||
+    hasStructuredClarificationMetadata({ metadata: input.metadata } as TimelineMessage)
+  ) {
+    return false;
+  }
+  const question = asText(input.metadata.question) || asText(input.content);
+  return /ppt/i.test(question) && question.includes('开始制作前') && question.includes('关键决策');
+}
+
+function hydrateLegacyPresentationBriefMetadata(input: {
+  messageType?: string | null;
+  content?: string | null;
+  metadata: Record<string, unknown>;
+  latestUserRequest?: string;
+}) {
+  if (!isLegacyPresentationBriefClarification(input)) {
+    return input.metadata;
+  }
+  const userRequest = asText(input.latestUserRequest) || asText(input.content) || asText(input.metadata.question);
+  return {
+    ...input.metadata,
+    clarificationType: 'presentation_brief',
+    structuredClarification: buildPresentationStructuredClarificationPlan({ userRequest }),
+  };
+}
 
 function mapStoredMessagesToTimeline(
   messages: Array<{
@@ -3118,42 +3164,59 @@ function mapStoredMessagesToTimeline(
     messageType?: string | null;
     content?: string | null;
     metadata?: unknown;
+    timelineCursor?: number | null;
     createdAt?: unknown;
   }>
 ): TimelineMessage[] {
-  return Array.isArray(messages)
-    ? messages.map((message, idx) => {
-        const sanitizedMetadata = sanitizeTimelineMetadataForClient(message.metadata);
-        const normalizedMetadata = normalizeMessageTimelineMetadata(
-          sanitizedMetadata,
-          message.createdAt,
-          idx
-        );
-        const messageKey = buildTimelineMessageKey({
-          id: message.id,
-          messageType: message.messageType,
-          metadata: sanitizedMetadata,
-          createdAt: message.createdAt,
-        });
-        const timestamp = asTimelineCursor(normalizedMetadata.timestamp);
-        const createdAt =
-          timestamp !== null
-            ? new Date(timestamp).toISOString()
-            : toIso(message.createdAt as any);
-        return {
-          id: String(message.id),
-          messageKey,
-          role: (message.role as any) || 'agent',
-          messageType: message.messageType || 'message',
-          content: message.content || '',
-          metadata: {
-            ...normalizedMetadata,
-            messageKey,
-          },
-          createdAt,
-        };
-      })
-    : [];
+  if (!Array.isArray(messages)) return [];
+  let latestUserRequest = '';
+  return messages.map((message, idx) => {
+    let sanitizedMetadata = sanitizeTimelineMetadataForClient(message.metadata);
+    sanitizedMetadata = hydrateLegacyPresentationBriefMetadata({
+      messageType: message.messageType,
+      content: message.content,
+      metadata: sanitizedMetadata,
+      latestUserRequest,
+    });
+    const timelineCursor =
+      asTimelineCursor(message.timelineCursor) ?? asTimelineCursor(sanitizedMetadata.timelineCursor);
+    if (timelineCursor !== null) {
+      sanitizedMetadata.timelineCursor = timelineCursor;
+    }
+    const normalizedMetadata = normalizeMessageTimelineMetadata(
+      sanitizedMetadata,
+      message.createdAt,
+      idx
+    );
+    const messageKey = buildTimelineMessageKey({
+      id: message.id,
+      messageType: message.messageType,
+      metadata: sanitizedMetadata,
+      createdAt: message.createdAt,
+    });
+    const timestamp = asTimelineCursor(normalizedMetadata.timestamp);
+    const createdAt =
+      timestamp !== null
+        ? new Date(timestamp).toISOString()
+        : toIso(message.createdAt as any);
+    const timelineMessage = {
+      id: String(message.id),
+      messageKey,
+      role: (message.role as any) || 'agent',
+      messageType: message.messageType || 'message',
+      content: message.content || '',
+      metadata: {
+        ...normalizedMetadata,
+        messageKey,
+      },
+      timelineCursor,
+      createdAt,
+    };
+    if (timelineMessage.role === 'user' && asText(timelineMessage.content)) {
+      latestUserRequest = timelineMessage.content;
+    }
+    return timelineMessage;
+  });
 }
 
 function attachTimelineMessageKeys(
@@ -3163,12 +3226,17 @@ function attachTimelineMessageKeys(
     messageType: string;
     content: string;
     metadata?: Record<string, unknown>;
+    timelineCursor?: number | null;
     createdAt: string;
   }>
 ): TimelineMessage[] {
   return Array.isArray(messages)
     ? messages.map((message) => {
         const sanitizedMetadata = sanitizeTimelineMetadataForClient(message.metadata);
+        const timelineCursor = asTimelineCursor(message.timelineCursor) ?? asTimelineCursor(sanitizedMetadata.timelineCursor);
+        if (timelineCursor !== null) {
+          sanitizedMetadata.timelineCursor = timelineCursor;
+        }
         const messageKey = buildTimelineMessageKey({
           id: message.id,
           messageType: message.messageType,
@@ -3182,9 +3250,106 @@ function attachTimelineMessageKeys(
             ...sanitizedMetadata,
             messageKey,
           },
+          timelineCursor,
         };
       })
     : [];
+}
+
+function tryParseJsonObject(value: string): unknown {
+  const text = asText(value);
+  if (!text) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
+function collectMcpConfirmationIdsFromValue(
+  value: unknown,
+  ids: Set<string>,
+  depth = 0
+) {
+  if (depth > 8 || value == null) return;
+  if (typeof value === 'string') {
+    collectMcpConfirmationIdsFromValue(tryParseJsonObject(value), ids, depth + 1);
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      collectMcpConfirmationIdsFromValue(item, ids, depth + 1);
+    }
+    return;
+  }
+  if (typeof value !== 'object') return;
+
+  const record = pickRecord(value);
+  const confirmationId = asText(record.confirmationId);
+  if (confirmationId) {
+    ids.add(confirmationId);
+  }
+
+  for (const key of [
+    'mcpToolConfirmation',
+    'structuredContent',
+    'result',
+    'outputPreview',
+    'output',
+    'content',
+    'rawPayload',
+    'event',
+    'properties',
+    'part',
+    'state',
+    'data',
+    'payload',
+  ]) {
+    collectMcpConfirmationIdsFromValue(record[key], ids, depth + 1);
+  }
+}
+
+async function enrichTimelineMessagesWithMcpConfirmationStatuses(
+  messages: TimelineMessage[]
+): Promise<TimelineMessage[]> {
+  const confirmationIds = new Set<string>();
+  for (const message of messages) {
+    collectMcpConfirmationIdsFromValue(message.metadata, confirmationIds);
+    collectMcpConfirmationIdsFromValue(message.content, confirmationIds);
+  }
+  if (confirmationIds.size === 0) return messages;
+
+  const rows = await taskSessionMcpToolConfirmationDAO.listByIds(Array.from(confirmationIds));
+  const statusById = new Map(
+    rows.map((row) => [asText(row.id), asText(row.status).toLowerCase()])
+  );
+  if (statusById.size === 0) return messages;
+
+  return messages.map((message) => {
+    const messageConfirmationIds = new Set<string>();
+    collectMcpConfirmationIdsFromValue(message.metadata, messageConfirmationIds);
+    collectMcpConfirmationIdsFromValue(message.content, messageConfirmationIds);
+
+    const statuses: Record<string, string> = {};
+    for (const confirmationId of messageConfirmationIds) {
+      const status = statusById.get(confirmationId);
+      if (status) {
+        statuses[confirmationId] = status;
+      }
+    }
+    if (Object.keys(statuses).length === 0) return message;
+
+    return {
+      ...message,
+      metadata: {
+        ...(message.metadata || {}),
+        mcpToolConfirmationStatuses: {
+          ...pickRecord(message.metadata?.mcpToolConfirmationStatuses),
+          ...statuses,
+        },
+      },
+    };
+  });
 }
 
 async function resolveRenderableTimelineMessages(
@@ -3272,6 +3437,8 @@ async function resolveRenderableTimelineMessages(
     return 0;
   });
 
+  messages = await enrichTimelineMessagesWithMcpConfirmationStatuses(messages);
+
   return messages;
 }
 
@@ -3292,6 +3459,62 @@ function buildTimelinePage(messages: TimelineMessage[]) {
 
 function resolveTimelineMessageKey(message: any): string {
   return asText(message?.messageKey) || asText(pickRecord(message?.metadata).messageKey);
+}
+
+function hasStructuredClarificationMetadata(message: TimelineMessage | undefined): boolean {
+  const metadata = pickRecord(message?.metadata);
+  if (asText(pickRecord(metadata.structuredClarification).kind) === 'structured_clarification') {
+    return true;
+  }
+  return asText(pickRecord(pickRecord(metadata.result).structuredClarification).kind) === 'structured_clarification';
+}
+
+function hasMatchingClarificationMetadata(input: {
+  redisMessage: TimelineMessage | undefined;
+  dbMessage: TimelineMessage | undefined;
+}) {
+  const dbMetadata = pickRecord(input.dbMessage?.metadata);
+  const redisMetadata = pickRecord(input.redisMessage?.metadata);
+  const dbClarificationType = asText(dbMetadata.clarificationType);
+  if (!dbClarificationType) {
+    return true;
+  }
+  if (asText(redisMetadata.clarificationType) !== dbClarificationType) {
+    return false;
+  }
+  if (hasStructuredClarificationMetadata(input.dbMessage)) {
+    return hasStructuredClarificationMetadata(input.redisMessage);
+  }
+  return true;
+}
+
+function isClarificationMetadataMessage(message: TimelineMessage | undefined) {
+  if (!message) return false;
+  const metadata = pickRecord(message.metadata);
+  return message.messageType === 'clarification_request' || Boolean(asText(metadata.clarificationType));
+}
+
+function needsCanonicalClarificationMetadata(input: {
+  candidateMessages: TimelineMessage[];
+  canonicalMessages: TimelineMessage[];
+}) {
+  const candidateByKey = new Map(
+    input.candidateMessages.map((message) => [resolveTimelineMessageKey(message), message])
+  );
+  return input.canonicalMessages
+    .filter(isClarificationMetadataMessage)
+    .some((canonicalMessage) => {
+      const messageKey = resolveTimelineMessageKey(canonicalMessage);
+      const candidateMessage = messageKey ? candidateByKey.get(messageKey) : undefined;
+      return !hasMatchingClarificationMetadata({
+        redisMessage: candidateMessage,
+        dbMessage: canonicalMessage,
+      });
+    });
+}
+
+function shouldCheckCanonicalClarificationMetadata(messages: TimelineMessage[]) {
+  return messages.some(isClarificationMetadataMessage);
 }
 
 function isRecentRedisPageFresh(input: {
@@ -3322,7 +3545,50 @@ function isRecentRedisPageFresh(input: {
   if (dbMessageKey && redisMessageKey !== dbMessageKey) {
     return false;
   }
+  if (
+    !hasMatchingClarificationMetadata({
+      redisMessage: redisLatest,
+      dbMessage: dbLatest,
+    })
+  ) {
+    return false;
+  }
+  if (needsCanonicalClarificationMetadata({ candidateMessages: redisMessages, canonicalMessages: dbMessages })) {
+    return false;
+  }
   return true;
+}
+
+async function loadCanonicalRecentTimelineMessages(
+  sessionId: string,
+  session: any,
+  limit = 50
+) {
+  const canonicalMessages = await taskCreationSessionDAO.getMessages(sessionId);
+  const timeline = filterLegacyTimelineNoise(
+    injectRuntimeGenerationBoundaries(
+      annotateRuntimeGenerations(mapStoredMessagesToTimeline(canonicalMessages), session?.runtime)
+    )
+  );
+  return timeline.slice(Math.max(timeline.length - limit, 0));
+}
+
+async function replaceRecentMessagesSnapshotFromTimeline(
+  sessionId: string,
+  messages: TimelineMessage[]
+) {
+  if (!Array.isArray(messages) || messages.length === 0) return;
+  await taskCreationSessionDAO.replaceRecentMessagesSnapshot(
+    sessionId,
+    messages.map((message) => ({
+      id: message.id,
+      role: message.role,
+      content: message.content,
+      messageType: message.messageType,
+      metadata: message.metadata,
+      createdAt: message.createdAt,
+    }))
+  );
 }
 
 function hasLegacyRecentNoise(messages: TimelineMessage[]) {
@@ -4960,30 +5226,69 @@ router.get('/sessions/:sessionId/messages/recent', async (req, res) => {
       });
       if (redisCachedPage) {
         const latestCachedMessages = await taskCreationSessionDAO.getRecentMessages(sessionId, 1);
-        const latestRecentMessages = filterLegacyTimelineNoise(
+        let latestRecentMessages = filterLegacyTimelineNoise(
           injectRuntimeGenerationBoundaries(
             annotateRuntimeGenerations(mapStoredMessagesToTimeline(latestCachedMessages), session?.runtime)
           )
         );
+        const redisCachedMessages = Array.isArray(redisCachedPage.messages)
+          ? (redisCachedPage.messages as TimelineMessage[])
+          : [];
+        if (
+          shouldCheckCanonicalClarificationMetadata(latestRecentMessages) ||
+          shouldCheckCanonicalClarificationMetadata(redisCachedMessages)
+        ) {
+          const latestCanonicalMessages = await loadCanonicalRecentTimelineMessages(sessionId, session, 50);
+          if (
+            needsCanonicalClarificationMetadata({
+              candidateMessages: latestRecentMessages,
+              canonicalMessages: latestCanonicalMessages,
+            })
+          ) {
+            latestRecentMessages = latestCanonicalMessages;
+          }
+        }
         if (
           isRecentRedisPageFresh({
             redisPage: redisCachedPage,
             latestDbMessages: latestRecentMessages,
           })
         ) {
+          const enrichedMessages = await enrichTimelineMessagesWithMcpConfirmationStatuses(
+            Array.isArray(redisCachedPage.messages) ? redisCachedPage.messages : []
+          );
           return res.json({
             success: true,
-            data: redisCachedPage,
+            data: {
+              ...redisCachedPage,
+              messages: enrichedMessages,
+            },
           });
         }
       }
     }
     const cachedMessages = await taskCreationSessionDAO.getRecentMessages(sessionId, 50);
-    const recentMessages = filterLegacyTimelineNoise(
+    let recentMessages = filterLegacyTimelineNoise(
       injectRuntimeGenerationBoundaries(
         annotateRuntimeGenerations(mapStoredMessagesToTimeline(cachedMessages), session?.runtime)
       )
     );
+    const canonicalRecentMessages = shouldCheckCanonicalClarificationMetadata(recentMessages)
+      ? await loadCanonicalRecentTimelineMessages(sessionId, session, 50)
+      : [];
+    const shouldUseCanonicalRecent =
+      canonicalRecentMessages.length > 0 &&
+      needsCanonicalClarificationMetadata({
+        candidateMessages: recentMessages,
+        canonicalMessages: canonicalRecentMessages,
+      });
+    if (shouldUseCanonicalRecent) {
+      recentMessages = canonicalRecentMessages;
+      void replaceRecentMessagesSnapshotFromTimeline(sessionId, canonicalRecentMessages).catch((error) => {
+        console.warn('[RECENT_MESSAGES_SYNC_FAILED]', { sessionId, error });
+      });
+    }
+    recentMessages = await enrichTimelineMessagesWithMcpConfirmationStatuses(recentMessages);
     const shouldHydrateFromNativeHistory =
       shouldPreferOpencodeNativeHistory &&
       (!hasRenderableAssistantReply(recentMessages) || hasLegacyRecentNoise(recentMessages));
@@ -5000,18 +5305,7 @@ router.get('/sessions/:sessionId/messages/recent', async (req, res) => {
           (resolvedRecentMessages[resolvedRecentMessages.length - 1]?.messageKey || '');
 
       if (cacheOutOfSync && resolvedRecentMessages.length > 0) {
-        void taskCreationSessionDAO
-          .replaceRecentMessagesSnapshot(
-            sessionId,
-            resolvedRecentMessages.map((message) => ({
-              id: message.id,
-              role: message.role,
-              content: message.content,
-              messageType: message.messageType,
-              metadata: message.metadata,
-              createdAt: message.createdAt,
-            }))
-          )
+        void replaceRecentMessagesSnapshotFromTimeline(sessionId, resolvedRecentMessages)
           .catch((error) => {
             console.warn('[RECENT_MESSAGES_SYNC_FAILED]', { sessionId, error });
           });

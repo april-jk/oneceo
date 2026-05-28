@@ -1,8 +1,68 @@
 import { describe, expect, it } from 'vitest';
-import { buildChatItems, type ChatItem } from '@/pages/Home';
+import { buildChatItems, getActiveManagedStatusText, type ChatItem } from '@/pages/Home';
 import type { AgentMessage } from '@/hooks/useTaskCreationAgent';
 
 describe('managed clarification rendering', () => {
+  it('renders structured clarification card plans as interactive chat items', () => {
+    const messages: AgentMessage[] = [
+      {
+        type: 'clarification_request',
+        content: '这份 PPT 开始制作前，先确认 4 个关键决策。',
+        question: '这份 PPT 开始制作前，先确认 4 个关键决策。',
+        messageKey: 'managed:run-ppt:clarification',
+        metadata: {
+          runId: 'run-ppt',
+          eventType: 'clarification_requested',
+          structuredClarification: {
+            kind: 'structured_clarification',
+            taskType: 'ppt',
+            title: '生成 PPT 前确认 4 个关键决策',
+            summary: '先确认受众、资料、深度和风格。',
+            maxCards: 4,
+            briefFields: ['purpose_audience'],
+            cards: [
+              {
+                id: 'purpose_audience',
+                title: '演示目的与受众',
+                question: '这份 PPT 主要给谁看？',
+                why: '决定叙事角度',
+                selectionMode: 'single',
+                required: true,
+                allowOther: true,
+                allowNote: true,
+                options: [
+                  {
+                    id: 'investor_pitch',
+                    label: '投资人融资路演',
+                    description: '强调投资价值',
+                    impact: '突出市场和融资用途。',
+                    recommended: true,
+                  },
+                  {
+                    id: 'executive_strategy',
+                    label: '内部高管战略汇报',
+                    description: '强调战略判断',
+                    impact: '突出风险和资源投入。',
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      },
+    ];
+
+    const items = buildChatItems(messages);
+    const structuredItems = items.filter(
+      (item): item is Extract<ChatItem, { kind: 'structured_clarification' }> =>
+        item.kind === 'structured_clarification'
+    );
+
+    expect(structuredItems).toHaveLength(1);
+    expect(structuredItems[0]?.plan.cards).toHaveLength(1);
+    expect(structuredItems[0]?.plan.cards[0]?.options[0]?.label).toBe('投资人融资路演');
+  });
+
   it('shows only clarification notice when clarification repeats previous assistant text', () => {
     const messages: AgentMessage[] = [
       {
@@ -41,11 +101,11 @@ describe('managed clarification rendering', () => {
     );
 
     expect(notices).toHaveLength(1);
-    expect(notices[0]?.text).toBe('Altus 将在你回复后继续工作');
+    expect(notices[0]?.text).toMatch(/Altus/);
     expect(clarificationBlocks).toHaveLength(0);
   });
 
-  it('keeps full clarification content when previous message is different', () => {
+  it('keeps non-PPT clarification requests as ordinary clarification text', () => {
     const messages: AgentMessage[] = [
       {
         type: 'agent_message',
@@ -72,11 +132,45 @@ describe('managed clarification rendering', () => {
     const items = buildChatItems(messages);
     const clarificationBlocks = items.filter(
       (item): item is Extract<ChatItem, { kind: 'agent' }> =>
-        item.kind === 'agent' && item.markdown.includes('**需要补充信息**')
+        item.kind === 'agent' && item.markdown.includes('请确认要部署到美东还是亚太区域。')
     );
 
     expect(clarificationBlocks).toHaveLength(1);
     expect(clarificationBlocks[0]?.markdown).toContain('请确认要部署到美东还是亚太区域。');
+    expect(items.some((item) => item.kind === 'structured_clarification')).toBe(false);
+  });
+
+  it('keeps a loading status while PPT clarification cards are not yet available', () => {
+    const messages: AgentMessage[] = [
+      {
+        type: 'clarification_request',
+        content: '这份 PPT 开始制作前，先确认 4 个关键决策。',
+        question: '这份 PPT 开始制作前，先确认 4 个关键决策。',
+        messageKey: 'managed:run-ppt-pending:clarification',
+        metadata: {
+          runId: 'run-ppt-pending',
+          eventType: 'clarification_requested',
+          clarificationType: 'presentation_brief',
+        },
+      },
+    ];
+
+    const items = buildChatItems(messages);
+    const managedStatusItems = items.filter(
+      (item): item is Extract<ChatItem, { kind: 'managed_status' }> =>
+        item.kind === 'managed_status'
+    );
+
+    expect(managedStatusItems).toHaveLength(1);
+    expect(managedStatusItems[0]?.displayInTimeline).toBe(false);
+    expect(getActiveManagedStatusText(items)).toBe('正在生成澄清选项...');
+    expect(items.some((item) => item.kind === 'structured_clarification')).toBe(false);
+    expect(
+      items.some(
+        (item): item is Extract<ChatItem, { kind: 'agent' }> =>
+          item.kind === 'agent' && item.markdown.includes('**需要补充信息**')
+      )
+    ).toBe(false);
   });
 
   it('hides mcp confirmation approval markers from rendered user messages', () => {

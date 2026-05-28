@@ -38,6 +38,10 @@ import {
 } from './altus-managed-shared';
 import type { AltusManagedTaskIntentProfile } from './altus-managed-prompt-service';
 import type { TaskClarificationType } from './task-intent-shape-service';
+import {
+  buildPresentationStructuredClarificationPlan,
+  type StructuredClarificationCardPlan,
+} from './altus-structured-clarification-service';
 import { uploadToR2 } from './r2-client';
 
 export type ManagedToolResult =
@@ -46,12 +50,14 @@ export type ManagedToolResult =
       content: string;
       activatedSkills?: ManagedSkillContext[];
       evidence?: ManagedToolEvidence[];
+      terminalInstruction?: string;
     }
   | {
       type: 'ask_user';
       question: string;
       options?: string[];
       clarificationType?: Exclude<TaskClarificationType, 'none'>;
+      structuredClarification?: StructuredClarificationCardPlan;
       activatedSkills?: ManagedSkillContext[];
     }
   | {
@@ -137,6 +143,103 @@ function asBoolean(value: unknown) {
   if (!text) return false;
   return ['1', 'true', 'yes', 'on'].includes(text);
 }
+
+function toRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function normalizeStructuredClarificationPlan(value: unknown): StructuredClarificationCardPlan | undefined {
+  const plan = toRecord(value);
+  if (plan.kind !== 'structured_clarification') return undefined;
+  const rawCards = Array.isArray(plan.cards) ? plan.cards : [];
+  const cards = rawCards
+    .map((rawCard) => {
+      const card = toRecord(rawCard);
+      const rawOptions = Array.isArray(card.options) ? card.options : [];
+      const options = rawOptions
+        .map((rawOption) => {
+          const option = toRecord(rawOption);
+          const id = asText(option.id);
+          const label = asText(option.label);
+          if (!id || !label) return null;
+          return {
+            id,
+            label,
+            description: asText(option.description),
+            impact: asText(option.impact),
+            recommended: Boolean(option.recommended),
+          };
+        })
+        .filter((item) => Boolean(item)) as StructuredClarificationCardPlan['cards'][number]['options'];
+      const limitedOptions = options.slice(0, 3).map((option, index) => ({
+        ...option,
+        recommended: index === 0,
+      }));
+      const id = asText(card.id);
+      const title = asText(card.title);
+      const question = asText(card.question);
+      if (!id || !title || !question || limitedOptions.length < 2) return null;
+      const selectionMode: StructuredClarificationCardPlan['cards'][number]['selectionMode'] =
+        card.selectionMode === 'multiple' ? 'multiple' : 'single';
+      return {
+        id,
+        title,
+        question,
+        why: asText(card.why),
+        selectionMode,
+        required: card.required !== false,
+        options: limitedOptions,
+        allowOther: card.allowOther !== false,
+        allowNote: card.allowNote !== false,
+        notePlaceholder: asText(card.notePlaceholder),
+      } satisfies StructuredClarificationCardPlan['cards'][number];
+    })
+    .filter((item) => Boolean(item)) as StructuredClarificationCardPlan['cards'];
+  const limitedCards = cards.slice(0, 4).map((card) => ({
+    ...card,
+    allowOther: true,
+    allowNote: false,
+  }));
+  if (limitedCards.length === 0) return undefined;
+  return {
+    kind: 'structured_clarification',
+    taskType: plan.taskType === 'report' || plan.taskType === 'website' || plan.taskType === 'generic' ? plan.taskType : 'ppt',
+    title: asText(plan.title) || '补充关键需求',
+    summary: asText(plan.summary),
+    maxCards: 4,
+    cards: limitedCards,
+    briefFields: Array.isArray(plan.briefFields)
+      ? plan.briefFields.map((item) => asText(item)).filter(Boolean).slice(0, 8)
+      : limitedCards.map((card) => card.id),
+  };
+}
+
+function shouldUsePresentationStructuredClarificationFallback(input: {
+  question: string;
+  clarificationType?: Exclude<TaskClarificationType, 'none'>;
+}) {
+  if (input.clarificationType === 'presentation_brief') return true;
+  return /(?:ppt|powerpoint|slides|演示文稿)/i.test(input.question) && /4\s*个关键决策/.test(input.question);
+}
+
+function resolveAskUserStructuredClarification(input: {
+  question: string;
+  clarificationType?: Exclude<TaskClarificationType, 'none'>;
+  structuredClarification?: unknown;
+}) {
+  return (
+    normalizeStructuredClarificationPlan(input.structuredClarification) ||
+    (shouldUsePresentationStructuredClarificationFallback(input)
+      ? buildPresentationStructuredClarificationPlan({ userRequest: input.question })
+      : undefined)
+  );
+}
+
+export const __altusManagedToolRuntimeTestHooks = {
+  resolveAskUserStructuredClarification,
+};
 
 function asStringArray(value: unknown, maxItems: number) {
   if (!Array.isArray(value)) return [];
@@ -1197,6 +1300,11 @@ export class AltusManagedToolRuntime {
   private readonly posix = path.posix;
   private readonly loadedConnectorGuides = new Set<string>();
   private readonly renderedPptxAttachmentPaths = new Set<string>();
+  private readonly htmlDeckRenderedPptxAttachmentPaths = new Set<string>();
+  private htmlDeckSourceTouched = false;
+  private htmlDeckRenderAttempted = false;
+  private htmlDeckRenderSucceeded = false;
+  private latestRenderedPptxAttachmentPath: string | null = null;
 
   private hasActiveSkill(slug: string) {
     return this.input.activeSkills.some((item) => asText(item.slug) === slug);
@@ -1544,13 +1652,28 @@ export class AltusManagedToolRuntime {
     if (!this.hasActiveSkill('ppt-workflow')) {
       return;
     }
+    for (const attachment of attachments) {
+      const normalizedPath = attachment.path.toLowerCase().replace(/\\/g, '/');
+      if (
+        (normalizedPath === 'ppt-html-deck' || normalizedPath.startsWith('ppt-html-deck/')) &&
+        !/^ppt-html-deck\/export\/[^/]+\.pptx$/i.test(normalizedPath)
+      ) {
+        throw new Error('complete_task_pptx_requires_render_pptx_from_html_deck');
+      }
+    }
     const pptxAttachments = attachments.filter((item) => item.path.toLowerCase().endsWith('.pptx'));
     if (pptxAttachments.length === 0) {
-      return;
+      throw new Error('complete_task_pptx_requires_render_pptx_from_instructions');
     }
     const missing = pptxAttachments.filter((item) => !this.renderedPptxAttachmentPaths.has(item.path));
     if (missing.length > 0) {
       throw new Error('complete_task_pptx_requires_render_pptx_from_instructions');
+    }
+    if (this.htmlDeckSourceTouched || this.htmlDeckRenderAttempted) {
+      const nonHtmlDeck = pptxAttachments.filter((item) => !this.htmlDeckRenderedPptxAttachmentPaths.has(item.path));
+      if (nonHtmlDeck.length > 0 || !this.htmlDeckRenderSucceeded) {
+        throw new Error('complete_task_pptx_requires_render_pptx_from_html_deck');
+      }
     }
   }
 
@@ -1559,6 +1682,16 @@ export class AltusManagedToolRuntime {
       return;
     }
     throw new Error('write_file_binary_deliverable_requires_generator');
+  }
+
+  private notePptHtmlDeckSourcePath(relativePath: string) {
+    if (!this.hasActiveSkill('ppt-workflow')) {
+      return;
+    }
+    const normalized = relativePath.replace(/^\/+/, '');
+    if (normalized === 'ppt-html-deck' || normalized.startsWith('ppt-html-deck/')) {
+      this.htmlDeckSourceTouched = true;
+    }
   }
 
   private parseTodos(raw: unknown) {
@@ -2060,6 +2193,13 @@ export class AltusManagedToolRuntime {
 
   async execute(toolName: string, rawArgs: Record<string, unknown>, signal?: AbortSignal): Promise<ManagedToolResult> {
     this.ensureNotAborted(signal);
+    if (
+      this.hasActiveSkill('ppt-workflow') &&
+      this.latestRenderedPptxAttachmentPath &&
+      toolName !== 'complete_task'
+    ) {
+      throw new Error(`ppt_workflow_render_completed_complete_task_required:${this.latestRenderedPptxAttachmentPath}`);
+    }
     await this.sandboxActivityDeps.touchSandbox(this.input.sandboxId, `managed_tool:${toolName}`).catch(() => null);
     this.enforceDeploymentIntent(toolName);
     const activatedSkills = await this.autoAttachSkillsForTool(toolName, signal);
@@ -2618,6 +2758,7 @@ export class AltusManagedToolRuntime {
       }, signal);
       await e2bConnector.writeFile(this.input.sandboxId, absolutePath, Buffer.from(content, 'utf-8'));
       this.ensureNotAborted(signal);
+      this.notePptHtmlDeckSourcePath(relativePath);
       await this.markWorkspaceDirty('managed_write_file');
       return {
         type: 'result',
@@ -2799,6 +2940,9 @@ export class AltusManagedToolRuntime {
       if (!this.hasActiveSkill('ppt-workflow')) {
         throw new Error('render_pptx_from_instructions_ppt_workflow_not_active');
       }
+      if (this.htmlDeckSourceTouched || this.htmlDeckRenderAttempted) {
+        throw new Error('render_pptx_from_instructions_blocked_after_html_deck_source');
+      }
       const result = await pptRenderToolService.render({
         sessionId: this.input.sessionId,
         sandboxId: this.input.sandboxId,
@@ -2809,6 +2953,7 @@ export class AltusManagedToolRuntime {
       if (result.status === 'completed') {
         if (result.pptxPath) {
           this.renderedPptxAttachmentPaths.add(result.pptxPath);
+          this.latestRenderedPptxAttachmentPath = result.pptxPath;
         }
         await this.sandboxActivityDeps.markSandboxDirty(this.input.sandboxId, 'ppt_render');
       }
@@ -2816,6 +2961,45 @@ export class AltusManagedToolRuntime {
         type: 'result',
         activatedSkills,
         content: JSON.stringify(result),
+        ...(result.status === 'completed' && result.pptxPath
+          ? {
+              terminalInstruction: `PPTX_RENDER_COMPLETED. Call complete_task now with attachments=[{"path":"${result.pptxPath}"}]. Do not run shell_execute, read_file, debug_open_page, browser_interact, or another PPT renderer.`,
+            }
+          : {}),
+      };
+    }
+
+    if (toolName === 'render_pptx_from_html_deck') {
+      if (!this.hasActiveSkill('ppt-workflow')) {
+        throw new Error('render_pptx_from_html_deck_ppt_workflow_not_active');
+      }
+      this.htmlDeckRenderAttempted = true;
+      const result = await pptRenderToolService.renderHtmlDeck({
+        sessionId: this.input.sessionId,
+        sandboxId: this.input.sandboxId,
+        workspaceRoot: this.input.workspaceRoot,
+        htmlDeckSpec: rawArgs.htmlDeckSpec,
+        projectRoot: asText(rawArgs.projectRoot) || null,
+        outputFileName: asText(rawArgs.outputFileName) || null,
+      });
+      if (result.status === 'completed') {
+        if (result.pptxPath) {
+          this.renderedPptxAttachmentPaths.add(result.pptxPath);
+          this.htmlDeckRenderedPptxAttachmentPaths.add(result.pptxPath);
+          this.latestRenderedPptxAttachmentPath = result.pptxPath;
+        }
+        this.htmlDeckRenderSucceeded = true;
+        await this.sandboxActivityDeps.markSandboxDirty(this.input.sandboxId, 'ppt_html_render');
+      }
+      return {
+        type: 'result',
+        activatedSkills,
+        content: JSON.stringify(result),
+        ...(result.status === 'completed' && result.pptxPath
+          ? {
+              terminalInstruction: `PPTX_RENDER_COMPLETED. Call complete_task now with attachments=[{"path":"${result.pptxPath}"}]. Do not run shell_execute, read_file, debug_open_page, browser_interact, or another PPT renderer.`,
+            }
+          : {}),
       };
     }
 
@@ -2833,15 +3017,22 @@ export class AltusManagedToolRuntime {
         clarificationType === 'tech_stack' ||
         clarificationType === 'scope_boundary' ||
         clarificationType === 'integration_target' ||
-        clarificationType === 'acceptance_requirement'
+        clarificationType === 'acceptance_requirement' ||
+        clarificationType === 'presentation_brief'
           ? clarificationType
           : undefined;
+      const structuredClarification = resolveAskUserStructuredClarification({
+        question,
+        clarificationType: normalizedClarificationType,
+        structuredClarification: rawArgs.structuredClarification,
+      });
       return {
         type: 'ask_user',
         activatedSkills,
         question,
         options: options.length > 0 ? options : undefined,
         clarificationType: normalizedClarificationType,
+        structuredClarification,
       };
     }
 

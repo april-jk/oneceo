@@ -6,6 +6,8 @@ import {
   GITHUB_FIXED_CALLBACK_PATH,
   GOOGLE_SUPER_FIXED_CALLBACK_PATH,
   normalizeEditableProfileId,
+  resolveConnectorCatalogForProfiles,
+  resolveConnectorDirectoryState,
   resolveAuthorizedRepositoryLabel,
   resolveConnectorOauthCallbackContext,
   SLACK_FIXED_CALLBACK_PATH,
@@ -21,6 +23,48 @@ describe("connector center panel profile id normalization", () => {
 
   it("keeps persisted profile ids unchanged", () => {
     expect(normalizeEditableProfileId("profile-123")).toBe("profile-123");
+  });
+
+  it("uses the standalone catalog when the profile snapshot has no catalog", () => {
+    const fallbackCatalog = [
+      {
+        key: "github",
+        category: "app",
+        name: "GitHub",
+        description: "GitHub connector",
+        icon: "github",
+        authModes: ["oauth"],
+        available: true,
+      },
+    ] as const;
+
+    expect(resolveConnectorCatalogForProfiles([], [...fallbackCatalog])).toEqual(fallbackCatalog);
+  });
+
+  it("keeps the directory out of a blank state while initial catalog is loading", () => {
+    expect(
+      resolveConnectorDirectoryState({
+        loading: true,
+        loadError: null,
+        catalogCount: 0,
+        activeTab: "app",
+        appCatalogCount: 0,
+        filteredAppCatalogCount: 0,
+      })
+    ).toBe("loading");
+  });
+
+  it("shows an explicit connector catalog empty state after loading completes", () => {
+    expect(
+      resolveConnectorDirectoryState({
+        loading: false,
+        loadError: null,
+        catalogCount: 0,
+        activeTab: "app",
+        appCatalogCount: 0,
+        filteredAppCatalogCount: 0,
+      })
+    ).toBe("no_catalog");
   });
 
   it("uses connector-level OAuth for GitHub, Notion, Figma, Slack, and Vercel", () => {
@@ -73,6 +117,17 @@ describe("connector center panel profile id normalization", () => {
 
   it("recognizes GitHub fixed callback pages as connector OAuth callbacks", () => {
     const params = new URLSearchParams("code=oauth-code&state=oauth-state");
+    const callback = resolveConnectorOauthCallbackContext("http://localhost/github/callback", params);
+
+    expect(callback.connector).toBe("github");
+    expect(callback.isFixedCallback).toBe(true);
+    expect(callback.shouldHandle).toBe(true);
+  });
+
+  it("recognizes GitHub Composio success callbacks without OAuth code", () => {
+    const params = new URLSearchParams(
+      "settings=open&settingsTab=connectors&connector_oauth=1&connector=github&state=oauth-state&status=success&connected_account_id=ca_123"
+    );
     const callback = resolveConnectorOauthCallbackContext("http://localhost/github/callback", params);
 
     expect(callback.connector).toBe("github");

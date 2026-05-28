@@ -23,10 +23,13 @@ export type PptContentArchetype = (typeof PPT_CONTENT_ARCHETYPES)[number];
 
 export const PPT_PAGE_TYPES = [
   'cover',
-  'toc',
-  'section_divider',
+  'agenda',
+  'section-divider',
   'content',
-  'summary',
+  'comparison',
+  'timeline',
+  'quote',
+  'closing',
 ] as const;
 
 export type PptPageType = (typeof PPT_PAGE_TYPES)[number];
@@ -77,7 +80,7 @@ export type PptFontPairing = (typeof PPT_FONT_PAIRINGS)[number];
 export const PPT_QA_GATE_RULES = [
   'final_pptx_exists',
   'has_cover_page',
-  'has_summary_page',
+  'has_closing_page',
   'has_at_least_two_non_text_content_pages',
   'has_at_least_two_content_subtypes',
   'no_three_repeated_layouts_in_a_row',

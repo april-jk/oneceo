@@ -341,6 +341,106 @@ test('buildTaskIntentProfile keeps trivial single-point tasks off the todo path'
   assert.equal(profile.clarificationType, 'none');
 });
 
+test('buildTaskIntentProfile requests structured presentation brief for vague PPT tasks', async () => {
+  mock.method(taskCreationSessionDAO, 'getMessages', async () => [
+    {
+      role: 'user',
+      messageType: 'user_input',
+      content: '帮我分析一下沐曦股份，做个 ppt',
+      metadata: {},
+    },
+  ] as any);
+  mock.method(taskCreationFileMemoryStore, 'getSession', async () => null as any);
+
+  const service = new AltusManagedSetupService();
+  const profile = await service.buildTaskIntentProfile(
+    'session-ppt-brief',
+    '帮我分析一下沐曦股份，做个 ppt',
+    'user_input'
+  );
+
+  assert.equal(profile.needsClarification, true);
+  assert.equal(profile.clarificationType, 'presentation_brief');
+  assert.equal(profile.structuredClarification?.kind, 'structured_clarification');
+  assert.equal(profile.structuredClarification?.cards.length, 4);
+  assert.match(profile.structuredClarification?.title || '', /沐曦股份/);
+  assert.match(profile.structuredClarification?.cards[0]?.question || '', /沐曦股份/);
+  for (const card of profile.structuredClarification?.cards || []) {
+    assert.equal(card.options.length, 3);
+    assert.equal(card.options.filter((option) => option.recommended).length, 1);
+  }
+});
+
+test('buildTaskIntentProfile does not request presentation cards when user asks to use defaults', async () => {
+  mock.method(taskCreationSessionDAO, 'getMessages', async () => [
+    {
+      role: 'user',
+      messageType: 'user_input',
+      content: '帮我分析一下沐曦股份，直接按默认做一个 12 页 ppt，不要问',
+      metadata: {},
+    },
+  ] as any);
+  mock.method(taskCreationFileMemoryStore, 'getSession', async () => null as any);
+
+  const service = new AltusManagedSetupService();
+  const profile = await service.buildTaskIntentProfile(
+    'session-ppt-defaults',
+    '帮我分析一下沐曦股份，直接按默认做一个 12 页 ppt，不要问',
+    'user_input'
+  );
+
+  assert.notEqual(profile.clarificationType, 'presentation_brief');
+});
+
+test('buildTaskIntentProfile keeps confirmed PPT brief out of web app materialization path', async () => {
+  const confirmedBrief = [
+    '已确认需求（结构化澄清选择）',
+    '来源：沐熙股份 PPT 制作前确认关键决策',
+    '- 演示目的与受众：企业品牌与业务推介',
+    '- 内容来源与可信度：官网、公告、权威媒体优先',
+    '- 深度与页数：12-15 页标准版',
+    '- 视觉与叙事风格：科技投研风',
+    '请基于以上 confirmed brief 先规划，再执行任务。',
+  ].join('\n');
+  mock.method(taskCreationSessionDAO, 'getMessages', async () => [
+    {
+      role: 'user',
+      messageType: 'user_input',
+      content: '帮我分析一下 沐熙股份，做个 ppt',
+      metadata: {},
+    },
+    {
+      role: 'agent',
+      messageType: 'clarification_request',
+      content: '这份 PPT 开始制作前，先确认 4 个关键决策。',
+      metadata: { clarificationType: 'presentation_brief' },
+    },
+    {
+      role: 'user',
+      messageType: 'user_response',
+      content: confirmedBrief,
+      metadata: { clarificationAnswer: true },
+    },
+  ] as any);
+  mock.method(taskCreationFileMemoryStore, 'getSession', async () => ({
+    pendingClarificationType: 'presentation_brief',
+    pendingQuestion: '这份 PPT 开始制作前，先确认 4 个关键决策。',
+    pendingOptions: [],
+  }) as any);
+
+  const service = new AltusManagedSetupService();
+  const profile = await service.buildTaskIntentProfile(
+    'session-ppt-confirmed-brief',
+    confirmedBrief,
+    'user_response'
+  );
+
+  assert.equal(profile.needsClarification, false);
+  assert.equal(profile.clarificationType, 'none');
+  assert.notEqual(profile.mode, 'deployable_web_app');
+  assert.equal(profile.webArtifactRequested, false);
+});
+
 test('buildTaskIntentProfile requires blueprint todo for new deployable web app tasks', async () => {
   mock.method(taskCreationSessionDAO, 'getMessages', async () => [
     {
@@ -435,6 +535,7 @@ test('buildTaskIntentProfile keeps clarifying the same field when a user respons
   assert.equal(profile.needsClarification, true);
   assert.equal(profile.clarificationType, 'artifact_type');
   assert.match(profile.clarificationQuestion, /我还需要先确认这一点/);
+  assert.equal(profile.structuredClarification, undefined);
 });
 
 test('buildTaskIntentProfile accepts a direct answer to pending artifact clarification without chaining another question', async () => {

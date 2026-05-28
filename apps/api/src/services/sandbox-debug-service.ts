@@ -36,6 +36,19 @@ function truncateText(value: unknown, maxLength = 4000): string {
   return `${text.slice(0, Math.max(0, maxLength - 24))}\n...<truncated>...`;
 }
 
+function isE2bControlPlaneTransientError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes('fetch failed') ||
+    normalized.includes('econnreset') ||
+    normalized.includes('connect timeout') ||
+    normalized.includes('und_err_connect_timeout') ||
+    normalized.includes('socket hang up') ||
+    normalized.includes('tls connection')
+  );
+}
+
 function toStringArray(value: unknown): string[] {
   if (Array.isArray(value)) {
     return value
@@ -267,6 +280,22 @@ function buildNekoClientUrl(baseUrl: string): string {
   return baseUrl;
 }
 
+async function resolveNekoBaseUrl(
+  orchestratorSessionId: string,
+  nekoPort: number,
+  previousBaseUrl?: string
+): Promise<string> {
+  try {
+    const host = await e2bConnector.getSandboxHost(orchestratorSessionId, nekoPort);
+    return `https://${host}`;
+  } catch (error) {
+    if (previousBaseUrl && isE2bControlPlaneTransientError(error)) {
+      return previousBaseUrl;
+    }
+    throw error;
+  }
+}
+
 function manifestMatchesDebugRuntime(manifest: string | undefined, configVersion: string): boolean {
   const raw = asText(manifest);
   if (!raw) return false;
@@ -292,6 +321,14 @@ export function __renderNekoMemberYamlForTest(): string {
 
 export function __buildNekoClientUrlForTest(baseUrl: string): string {
   return buildNekoClientUrl(baseUrl);
+}
+
+export async function __resolveNekoBaseUrlForTest(
+  orchestratorSessionId: string,
+  nekoPort: number,
+  previousBaseUrl?: string
+): Promise<string> {
+  return resolveNekoBaseUrl(orchestratorSessionId, nekoPort, previousBaseUrl);
 }
 
 export async function __probeChromiumCdpForTest(sandboxId: string, port: number): Promise<boolean> {
@@ -1322,8 +1359,7 @@ write_manifest "running" "debug browser ready"
         manifestMatchesDebugRuntime(reconciledDiagnostics.manifest, configVersion) &&
         (!strictIceCheck || !(await probeNekoIceHealth(orchestratorSessionId)).failed)
       ) {
-        const host = await e2bConnector.getSandboxHost(orchestratorSessionId, nekoPort);
-        const baseUrl = `https://${host}`;
+        const baseUrl = await resolveNekoBaseUrl(orchestratorSessionId, nekoPort, previousBaseUrl);
         const clientUrl = buildNekoClientUrl(baseUrl);
         await updateMetadata({
           baseUrl,
@@ -1403,8 +1439,7 @@ write_manifest "running" "debug browser ready"
           (!strictIceCheck || !(await probeNekoIceHealth(orchestratorSessionId)).failed)
         ) {
           const recoveryDiagnostics = await collectNekoDebugDiagnostics(orchestratorSessionId);
-          const host = await e2bConnector.getSandboxHost(orchestratorSessionId, nekoPort);
-          const baseUrl = `https://${host}`;
+          const baseUrl = await resolveNekoBaseUrl(orchestratorSessionId, nekoPort, previousBaseUrl);
           const clientUrl = buildNekoClientUrl(baseUrl);
           await updateMetadata({
             baseUrl,
@@ -1537,8 +1572,7 @@ write_manifest "running" "debug browser ready"
     }
   }
 
-  const host = await e2bConnector.getSandboxHost(orchestratorSessionId, nekoPort);
-  const baseUrl = `https://${host}`;
+  const baseUrl = await resolveNekoBaseUrl(orchestratorSessionId, nekoPort, previousBaseUrl);
   const clientUrl = buildNekoClientUrl(baseUrl);
 
   await updateMetadata({

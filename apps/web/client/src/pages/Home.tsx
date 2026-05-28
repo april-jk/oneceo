@@ -11,6 +11,8 @@ import {
   useEffect,
   useMemo,
   useCallback,
+  type ClipboardEvent,
+  type DragEvent,
   type KeyboardEvent,
   type ReactNode,
 } from "react";
@@ -76,7 +78,10 @@ import ConnectorDialog from "@/components/ConnectorDialog";
 import VoiceInputButton from "@/components/VoiceInputButton";
 import AttachmentChipList from "@/components/AttachmentChipList";
 import AttachmentPickerButton from "@/components/AttachmentPickerButton";
-import MessageAttachmentReference from "@/components/MessageAttachmentReference";
+import {
+  MessageAttachmentFiles,
+  MessageInlineReferences,
+} from "@/components/MessageAttachmentReference";
 import OpencodePreviewPanel from "@/components/OpencodePreviewPanel";
 import AltusArtifactPreviewCard, {
   type AltusArtifactFile,
@@ -147,6 +152,10 @@ import {
   type PendingAttachment,
 } from "@/lib/task-attachments";
 import {
+  extractFilesFromTransfer,
+  hasFileTransfer,
+} from "@/lib/task-attachment-transfer";
+import {
   buildManagedTaskInputMetadata,
   type TaskCreationMcpReference,
 } from "@/lib/task-input-metadata";
@@ -169,6 +178,15 @@ const BILLING_TERMINAL_RUN_STATUSES = new Set(["completed", "failed", "stopped"]
 const HOME_NEW_TASK_TOUR_KEY = "oneceo:tour.home_new_task.completed";
 const MANAGED_AUTO_DEBUG_READY_POLL_MS = 1000;
 const MANAGED_AUTO_DEBUG_RETRY_POLL_MS = 2000;
+
+export function resolveHomeSubmitActiveSessionId(input: {
+  routeForcesNewSession: boolean;
+  sessionId?: string | null;
+  uploadSessionId?: string | null;
+}): string {
+  if (input.routeForcesNewSession) return "";
+  return (input.sessionId || input.uploadSessionId || "").trim();
+}
 
 type HomeScenarioModel = "lite" | "pro" | "max";
 
@@ -758,7 +776,63 @@ type GoogleWorkspaceConfirmationView = {
   target: string;
   impact: string;
   parameterSummary: Record<string, unknown>;
+  status?: string;
 };
+
+function normalizeMcpConfirmationStatus(value: unknown): string {
+  return asText(value).toLowerCase();
+}
+
+function isResolvedMcpConfirmationStatus(value: unknown): boolean {
+  const status = normalizeMcpConfirmationStatus(value);
+  return (
+    status === "approved" ||
+    status === "rejected" ||
+    status === "consumed" ||
+    status === "expired"
+  );
+}
+
+export function shouldRenderGoogleWorkspaceConfirmation(input: {
+  confirmation?: Pick<GoogleWorkspaceConfirmationView, "confirmationId" | "status"> | null;
+  hiddenConfirmationIds?: string[];
+}): boolean {
+  const confirmationId = asText(input.confirmation?.confirmationId);
+  if (!confirmationId) return false;
+  if (isResolvedMcpConfirmationStatus(input.confirmation?.status)) return false;
+  return !input.hiddenConfirmationIds?.includes(confirmationId);
+}
+
+export function resolveHandledGoogleConfirmationIds(
+  messages: AgentMessage[],
+  handledIds: string[] = [],
+): string[] {
+  const ids = new Set(handledIds);
+  for (const item of messages) {
+    const metadata = toRecord(item.metadata);
+    const confirmationId =
+      asText(toRecord(metadata.mcpToolConfirmation).confirmationId) ||
+      asText(metadata.confirmationId);
+    if (confirmationId) {
+      const source = asText(metadata.source);
+      if (
+        source === "mcp_tool_confirmation_approved" ||
+        source === "mcp_tool_confirmation_rejected" ||
+        source === "mcp_tool_confirmation_followup"
+      ) {
+        ids.add(confirmationId);
+      }
+    }
+
+    const confirmationStatuses = toRecord(metadata.mcpToolConfirmationStatuses);
+    for (const [statusConfirmationId, status] of Object.entries(confirmationStatuses)) {
+      if (isResolvedMcpConfirmationStatus(status)) {
+        ids.add(statusConfirmationId);
+      }
+    }
+  }
+  return Array.from(ids);
+}
 
 function getMcpConfirmationConnectorLabel(connectorKeyRaw: string) {
   const connectorKey = asText(connectorKeyRaw);
@@ -1099,6 +1173,18 @@ export default function Home() {
   const [projectMenuOpen, setProjectMenuOpen] = useState(false);
   const [mode, setMode] = useState<PageMode>("input");
   const [message, setMessage] = useState("");
+  const [uploadingAttachmentIds, setUploadingAttachmentIds] = useState<
+    string[]
+  >([]);
+  const uploadedAttachmentRecordsRef = useRef<
+    Record<string, UploadedTaskAttachment>
+  >({});
+  const uploadPromisesRef = useRef(
+    new Map<string, Promise<UploadedTaskAttachment>>(),
+  );
+  const uploadSessionIdRef = useRef<string>("");
+  const [isComposerDragActive, setIsComposerDragActive] = useState(false);
+  const composerDragDepthRef = useRef(0);
   const [handledGoogleConfirmationIds, setHandledGoogleConfirmationIds] = useState<
     string[]
   >([]);
@@ -1313,23 +1399,10 @@ export default function Home() {
     },
   });
   const resolvedGoogleConfirmationIds = useMemo(() => {
-    const ids = new Set(handledGoogleConfirmationIds);
-    for (const item of messages) {
-      const metadata = toRecord(item.metadata);
-      const confirmationId =
-        asText(toRecord(metadata.mcpToolConfirmation).confirmationId) ||
-        asText(metadata.confirmationId);
-      if (!confirmationId) continue;
-      const source = asText(metadata.source);
-      if (
-        source === "mcp_tool_confirmation_approved" ||
-        source === "mcp_tool_confirmation_rejected" ||
-        source === "mcp_tool_confirmation_followup"
-      ) {
-        ids.add(confirmationId);
-      }
-    }
-    return Array.from(ids);
+    return resolveHandledGoogleConfirmationIds(
+      messages,
+      handledGoogleConfirmationIds,
+    );
   }, [handledGoogleConfirmationIds, messages]);
 
   useEffect(() => {
@@ -1977,6 +2050,7 @@ export default function Home() {
     const pendingAttachments = consumePendingDraftAttachments();
     if (!pendingAttachments.length) return;
     setAttachments(pendingAttachments);
+    startPendingAttachmentUploads(pendingAttachments);
   }, []);
 
   useEffect(() => {
@@ -2029,10 +2103,149 @@ export default function Home() {
     window.history.replaceState(null, "", base);
   };
 
+  const setAttachmentUploading = (id: string, uploading: boolean) => {
+    setUploadingAttachmentIds((current) => {
+      if (uploading) {
+        return current.includes(id) ? current : [...current, id];
+      }
+      return current.filter((item) => item !== id);
+    });
+  };
+
+  const ensureAttachmentUploadSession = async (fallbackTitle: string) => {
+    const existing = (sessionId || uploadSessionIdRef.current || "").trim();
+    if (existing) return existing;
+    const created = await ensureSession(
+      fallbackTitle || t("homeWorkspace.newTaskSession"),
+    );
+    uploadSessionIdRef.current = created;
+    return created;
+  };
+
+  const ensurePendingAttachmentUploaded = (
+    attachment: Extract<PendingAttachment, { kind: "file" }>,
+    forcedSessionId?: string,
+  ) => {
+    const uploaded = uploadedAttachmentRecordsRef.current[attachment.id];
+    if (uploaded) return Promise.resolve(uploaded);
+
+    const running = uploadPromisesRef.current.get(attachment.id);
+    if (running) return running;
+
+    setAttachmentUploading(attachment.id, true);
+    const promise = (async () => {
+      const activeSessionId =
+        forcedSessionId ||
+        (await ensureAttachmentUploadSession(attachment.name));
+      uploadSessionIdRef.current = activeSessionId;
+      const result = await uploadTaskCreationAttachment(
+        activeSessionId,
+        attachment.file,
+      );
+      uploadedAttachmentRecordsRef.current = {
+        ...uploadedAttachmentRecordsRef.current,
+        [attachment.id]: result,
+      };
+      return result;
+    })();
+
+    uploadPromisesRef.current.set(attachment.id, promise);
+    promise
+      .catch((error) => {
+        toast.error(
+          error instanceof Error
+            ? error.message
+            : t("homeWorkspace.attachmentSendFailed"),
+        );
+      })
+      .finally(() => {
+        uploadPromisesRef.current.delete(attachment.id);
+        setAttachmentUploading(attachment.id, false);
+      });
+
+    return promise;
+  };
+
+  const startPendingAttachmentUploads = (items: PendingAttachment[]) => {
+    if (readAltusMode() === "managed") return;
+    items
+      .filter(
+        (item): item is Extract<PendingAttachment, { kind: "file" }> =>
+          item.kind === "file",
+      )
+      .forEach((item) => {
+        void ensurePendingAttachmentUploaded(item);
+      });
+  };
+
+  const clearAttachmentUploadState = (ids: string[]) => {
+    if (!ids.length) return;
+    uploadedAttachmentRecordsRef.current = Object.fromEntries(
+      Object.entries(uploadedAttachmentRecordsRef.current).filter(
+        ([id]) => !ids.includes(id),
+      ),
+    );
+    ids.forEach((id) => uploadPromisesRef.current.delete(id));
+    setUploadingAttachmentIds((current) =>
+      current.filter((id) => !ids.includes(id)),
+    );
+  };
+
   const handleAttachmentSelect = (files: File[]) => {
+    if (files.length === 0) return;
     const merged = mergePendingAttachments(attachments, files);
     setAttachments(merged.attachments);
+    startPendingAttachmentUploads(merged.attachments);
     merged.rejected.forEach((item) => toast.error(item));
+  };
+
+  const resetComposerDragState = () => {
+    composerDragDepthRef.current = 0;
+    setIsComposerDragActive(false);
+  };
+
+  const handleComposerDragEnter = (event: DragEvent<HTMLElement>) => {
+    if (!hasFileTransfer(event.dataTransfer)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    composerDragDepthRef.current += 1;
+    setIsComposerDragActive(true);
+  };
+
+  const handleComposerDragOver = (event: DragEvent<HTMLElement>) => {
+    if (!hasFileTransfer(event.dataTransfer)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.dataTransfer.dropEffect = "copy";
+    setIsComposerDragActive(true);
+  };
+
+  const handleComposerDragLeave = (event: DragEvent<HTMLElement>) => {
+    if (!hasFileTransfer(event.dataTransfer)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    composerDragDepthRef.current = Math.max(
+      0,
+      composerDragDepthRef.current - 1,
+    );
+    if (composerDragDepthRef.current === 0) {
+      setIsComposerDragActive(false);
+    }
+  };
+
+  const handleComposerDrop = (event: DragEvent<HTMLElement>) => {
+    if (!hasFileTransfer(event.dataTransfer)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    resetComposerDragState();
+    handleAttachmentSelect(extractFilesFromTransfer(event.dataTransfer));
+  };
+
+  const handleComposerPaste = (event: ClipboardEvent<HTMLElement>) => {
+    const files = extractFilesFromTransfer(event.clipboardData);
+    if (files.length === 0) return;
+    event.preventDefault();
+    handleAttachmentSelect(files);
   };
 
   const handleSkillSelect = (skills: TaskCreationPlatformSkill[]) => {
@@ -2050,6 +2263,7 @@ export default function Home() {
   );
 
   const removeAttachment = (id: string) => {
+    clearAttachmentUploadState([id]);
     setAttachments((prev) => prev.filter((item) => item.id !== id));
   };
 
@@ -2224,9 +2438,6 @@ export default function Home() {
     if (!baseText) return;
     const altusMode = readAltusMode();
 
-    if (hasAttachments) {
-      setAttachments([]);
-    }
     if (hasReferences) {
       setComposerReferences([]);
     }
@@ -2258,7 +2469,18 @@ export default function Home() {
           ) === index,
       );
       const selectedMcp = normalizeComposerSelectedMcp(referenceDrafts);
-      let activeSessionId = (sessionId || "").trim();
+      const currentPath =
+        typeof window !== "undefined" ? window.location.pathname : location;
+      const currentSearch =
+        typeof window !== "undefined" ? window.location.search : search;
+      const routeForcesNewSession =
+        currentPath.startsWith("/new-task") &&
+        Boolean(new URLSearchParams(currentSearch).get("new")?.trim());
+      let activeSessionId = resolveHomeSubmitActiveSessionId({
+        routeForcesNewSession,
+        sessionId,
+        uploadSessionId: uploadSessionIdRef.current,
+      });
       if (
         altusMode !== "managed" &&
         uploadableAttachments.length > 0 &&
@@ -2273,9 +2495,14 @@ export default function Home() {
       if (altusMode !== "managed" && uploadableAttachments.length > 0) {
         uploadedAttachments = await Promise.all(
           uploadableAttachments.map((item) =>
-            uploadTaskCreationAttachment(activeSessionId, item.file),
+            ensurePendingAttachmentUploaded(item, activeSessionId),
           ),
         );
+        activeSessionId = (
+          sessionId ||
+          uploadSessionIdRef.current ||
+          activeSessionId
+        ).trim();
       }
 
       exitHistoryView();
@@ -2316,6 +2543,10 @@ export default function Home() {
                   : undefined,
           },
         );
+      }
+      if (hasAttachments) {
+        clearAttachmentUploadState(uploadableAttachments.map((item) => item.id));
+        setAttachments([]);
       }
     } catch (error) {
       if (hasAttachments) {
@@ -2424,9 +2655,6 @@ export default function Home() {
     const altusMode = readAltusMode();
     const activeSessionId = (sessionId || "").trim() || undefined;
 
-    if (hasAttachments) {
-      setAttachments([]);
-    }
     if (hasReferences) {
       setComposerReferences([]);
     }
@@ -2458,15 +2686,17 @@ export default function Home() {
           ) === index,
       );
       const selectedMcp = normalizeComposerSelectedMcp(referenceDrafts);
+      const resolvedSessionId =
+        activeSessionId || uploadSessionIdRef.current || "";
       let uploadedAttachments: UploadedTaskAttachment[] = [];
       if (
         altusMode !== "managed" &&
         uploadableAttachments.length > 0 &&
-        activeSessionId
+        resolvedSessionId
       ) {
         uploadedAttachments = await Promise.all(
           uploadableAttachments.map((item) =>
-            uploadTaskCreationAttachment(activeSessionId, item.file),
+            ensurePendingAttachmentUploaded(item, resolvedSessionId),
           ),
         );
       }
@@ -2490,7 +2720,7 @@ export default function Home() {
         await answerQuestion(
           appendAttachmentsToPrompt(baseText, uploadedAttachments),
           {
-            sessionId: activeSessionId,
+            sessionId: resolvedSessionId || activeSessionId,
             metadata:
               uploadedAttachments.length || mergedSkills.length
                 ? {
@@ -2511,6 +2741,10 @@ export default function Home() {
                   : undefined,
           },
         );
+      }
+      if (hasAttachments) {
+        clearAttachmentUploadState(uploadableAttachments.map((item) => item.id));
+        setAttachments([]);
       }
     } catch (error) {
       if (hasAttachments) {
@@ -3395,7 +3629,7 @@ export default function Home() {
           }}
           className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-6 py-5 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden"
         >
-          <div className="mx-auto w-full space-y-4">
+          <div className="mx-auto w-full max-w-[52rem] space-y-4">
             {isLoadingOlderHistory && (
               <NoticeMessage
                 tone="info"
@@ -3443,11 +3677,12 @@ export default function Home() {
                   onRejectGoogleWorkspaceConfirmation={
                     rejectGoogleWorkspaceConfirmation
                   }
+                  onSubmitStructuredClarification={handleAnswerQuestion}
                 />
               ))}
             </AnimatePresence>
 
-            {isProcessing && !currentQuestion && (
+            {(isProcessing || Boolean(managedProcessingText)) && !currentQuestion && (
               <NoticeMessage
                 tone="info"
                 icon={<Loader2 className="w-4 h-4 animate-spin" />}
@@ -3471,12 +3706,37 @@ export default function Home() {
         >
           <div className="px-6 py-3">
             {slashSuggestionPanel ? (
-              <div className="mx-auto mb-2 w-[92%] max-w-full">
+              <div className="mx-auto mb-2 w-[92%] max-w-[52rem]">
                 {slashSuggestionPanel}
               </div>
             ) : null}
-            <div data-tour="home-composer" className="w-full rounded-[2rem] border border-border/70 bg-card shadow-[0_12px_40px_rgba(15,23,42,0.08)] transition-all duration-200 hover:border-border focus-within:border-ring focus-within:shadow-[0_0_0_4px_rgba(59,130,246,0.18),0_12px_40px_rgba(15,23,42,0.08)] dark:shadow-[0_18px_48px_rgba(0,0,0,0.36)]">
+            <div
+              data-tour="home-composer"
+              className={`relative mx-auto w-full max-w-[52rem] rounded-[1.15rem] border border-border/80 bg-card/96 shadow-[0_16px_34px_rgba(15,35,65,0.08)] transition-all duration-200 hover:border-border focus-within:border-ring focus-within:shadow-[0_0_0_3px_rgba(9,105,218,0.16),0_16px_34px_rgba(15,35,65,0.08)] dark:shadow-[0_18px_48px_rgba(0,0,0,0.36)] ${
+                isComposerDragActive
+                  ? "border-ring shadow-[0_0_0_3px_rgba(9,105,218,0.16),0_16px_34px_rgba(15,35,65,0.08)]"
+                  : ""
+              }`}
+              onDragEnter={handleComposerDragEnter}
+              onDragOver={handleComposerDragOver}
+              onDragLeave={handleComposerDragLeave}
+              onDrop={handleComposerDrop}
+              onPaste={handleComposerPaste}
+            >
+              {isComposerDragActive ? (
+                <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center rounded-[1.15rem] border border-dashed border-ring bg-card/90 text-sm font-medium text-foreground">
+                  <span className="inline-flex items-center gap-2 rounded-full bg-background px-3 py-2 shadow-sm">
+                    <FilePlus className="h-4 w-4 text-primary" />
+                    {t("attachments.dropToUpload")}
+                  </span>
+                </div>
+              ) : null}
               <div className="space-y-3 p-4">
+                <AttachmentChipList
+                  attachments={attachments}
+                  onRemove={removeAttachment}
+                  uploadingIds={uploadingAttachmentIds}
+                />
                 <Textarea
                   placeholder={
                     currentQuestion
@@ -3499,15 +3759,10 @@ export default function Home() {
                       },
                     })
                   }
-                  className="min-h-[56px] resize-none border-0 bg-transparent px-0 py-0 text-base text-foreground placeholder:text-muted-foreground focus-visible:ring-0"
+                  className="min-h-[56px] resize-none border-0 bg-transparent px-0 py-0 text-[15px] leading-6 text-foreground placeholder:text-muted-foreground focus-visible:ring-0 md:text-[15px]"
                   rows={2}
                 />
                 {composerReferenceTokens}
-
-                <AttachmentChipList
-                  attachments={attachments}
-                  onRemove={removeAttachment}
-                />
 
                 <TooltipProvider>
                   <div className="flex items-center justify-between pt-2">
@@ -3746,7 +4001,32 @@ export default function Home() {
                       </div>
                     ) : null}
                     {/* Text Area and Actions - Single Container */}
-                    <div data-tour="home-composer" className="relative z-10 space-y-3 rounded-[2rem] border border-border/70 bg-card p-4 shadow-[0_12px_40px_rgba(15,23,42,0.08)] transition-all duration-200 hover:border-border focus-within:border-ring focus-within:shadow-[0_0_0_4px_rgba(59,130,246,0.18),0_12px_40px_rgba(15,23,42,0.08)] dark:shadow-[0_18px_48px_rgba(0,0,0,0.36)]">
+                    <div
+                      data-tour="home-composer"
+                      className={`relative z-10 space-y-3 rounded-[1.15rem] border border-border/80 bg-card/96 p-4 shadow-[0_16px_34px_rgba(15,35,65,0.08)] transition-all duration-200 hover:border-border focus-within:border-ring focus-within:shadow-[0_0_0_3px_rgba(9,105,218,0.16),0_16px_34px_rgba(15,35,65,0.08)] dark:shadow-[0_18px_48px_rgba(0,0,0,0.36)] ${
+                        isComposerDragActive
+                          ? "border-ring shadow-[0_0_0_3px_rgba(9,105,218,0.16),0_16px_34px_rgba(15,35,65,0.08)]"
+                          : ""
+                      }`}
+                      onDragEnter={handleComposerDragEnter}
+                      onDragOver={handleComposerDragOver}
+                      onDragLeave={handleComposerDragLeave}
+                      onDrop={handleComposerDrop}
+                      onPaste={handleComposerPaste}
+                    >
+                      {isComposerDragActive ? (
+                        <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center rounded-[1.15rem] border border-dashed border-ring bg-card/90 text-sm font-medium text-foreground">
+                          <span className="inline-flex items-center gap-2 rounded-full bg-background px-3 py-2 shadow-sm">
+                            <FilePlus className="h-4 w-4 text-primary" />
+                            {t("attachments.dropToUpload")}
+                          </span>
+                        </div>
+                      ) : null}
+                      <AttachmentChipList
+                        attachments={attachments}
+                        onRemove={removeAttachment}
+                        uploadingIds={uploadingAttachmentIds}
+                      />
                       {/* Textarea */}
                       <Textarea
                         placeholder={t("homePage.textareaPlaceholder")}
@@ -3759,15 +4039,10 @@ export default function Home() {
                             submit: () => handleSend(),
                           })
                         }
-                        className="min-h-[100px] resize-none border-0 bg-transparent px-0 py-0 text-base text-foreground placeholder:text-muted-foreground focus-visible:ring-0"
+                        className="min-h-[100px] resize-none border-0 bg-transparent px-0 py-0 text-[15px] leading-6 text-foreground placeholder:text-muted-foreground focus-visible:ring-0 md:text-[15px]"
                         rows={4}
                       />
                       {composerReferenceTokens}
-
-                      <AttachmentChipList
-                        attachments={attachments}
-                        onRemove={removeAttachment}
-                      />
 
                       {/* Bottom Action Bar */}
                       <TooltipProvider>
@@ -3909,7 +4184,7 @@ export default function Home() {
                         <DropdownMenuTrigger asChild>
                           <button
                             type="button"
-                            className="relative z-0 -mt-5 mx-auto flex w-[94%] items-center justify-end rounded-b-[1.65rem] rounded-t-[0.9rem] border border-t-0 border-border/35 bg-muted/42 px-5 pb-3 pt-7 text-right shadow-[0_16px_28px_rgba(15,23,42,0.07)] backdrop-blur-[2px] transition-colors hover:bg-muted/54 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 dark:bg-muted/24 dark:hover:bg-muted/32 dark:shadow-[0_18px_32px_rgba(0,0,0,0.18)]"
+                            className="relative z-0 -mt-4 mx-auto flex w-[94%] items-center justify-end rounded-b-[1rem] rounded-t-[0.55rem] border border-t-0 border-border/45 bg-muted/48 px-5 pb-3 pt-6 text-right shadow-[0_12px_24px_rgba(15,35,65,0.06)] transition-colors hover:bg-muted/58 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 dark:bg-muted/24 dark:hover:bg-muted/32 dark:shadow-[0_18px_32px_rgba(0,0,0,0.18)]"
                             aria-label={t("homePage.projectSelectorLabel")}
                           >
                             <div
@@ -4289,12 +4564,47 @@ function NoticeMessage({
   );
 }
 
+type StructuredClarificationOption = {
+  id: string;
+  label: string;
+  description?: string;
+  impact?: string;
+  recommended?: boolean;
+  isCustom?: boolean;
+};
+
+type StructuredClarificationCard = {
+  id: string;
+  title: string;
+  question: string;
+  why?: string;
+  selectionMode: "single" | "multiple";
+  required?: boolean;
+  options: StructuredClarificationOption[];
+  allowOther?: boolean;
+  allowNote?: boolean;
+  notePlaceholder?: string;
+};
+
+type StructuredClarificationCardPlan = {
+  kind: "structured_clarification";
+  taskType: "ppt" | "report" | "website" | "generic";
+  title: string;
+  summary?: string;
+  maxCards: 4;
+  cards: StructuredClarificationCard[];
+  briefFields?: string[];
+};
+
+const STRUCTURED_CLARIFICATION_PENDING_TEXT = "正在生成澄清选项...";
+
 export type ChatItem =
   | {
       kind: "user";
       text: string;
       skills?: TaskCreationPlatformSkill[];
       attachments?: UploadedTaskAttachment[];
+      mcpReferences?: TaskCreationMcpReference[];
       messageKey?: string;
     }
   | {
@@ -4307,6 +4617,12 @@ export type ChatItem =
   | {
       kind: "clarification_notice";
       text: string;
+      messageKey?: string;
+    }
+  | {
+      kind: "structured_clarification";
+      question: string;
+      plan: StructuredClarificationCardPlan;
       messageKey?: string;
     }
   | {
@@ -4414,6 +4730,7 @@ export type ChatItem =
       userText: string;
       skills?: TaskCreationPlatformSkill[];
       attachments?: UploadedTaskAttachment[];
+      mcpReferences?: TaskCreationMcpReference[];
       userMessageKey?: string;
       assistantParts: OpencodeTurnPart[];
       working?: boolean;
@@ -4777,13 +5094,15 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
     text: string,
     skills?: TaskCreationPlatformSkill[],
     attachments?: UploadedTaskAttachment[],
+    mcpReferences?: TaskCreationMcpReference[],
     messageKey?: string,
   ) => {
     const normalized = normalizeForDedup(text);
     if (
       !normalized &&
       (!skills || skills.length === 0) &&
-      (!attachments || attachments.length === 0)
+      (!attachments || attachments.length === 0) &&
+      (!mcpReferences || mcpReferences.length === 0)
     ) {
       return;
     }
@@ -4796,7 +5115,9 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
       normalizeForDedup(last.text) === normalized &&
       JSON.stringify(last.skills || []) === JSON.stringify(skills || []) &&
       JSON.stringify(last.attachments || []) ===
-        JSON.stringify(attachments || [])
+        JSON.stringify(attachments || []) &&
+      JSON.stringify(last.mcpReferences || []) ===
+        JSON.stringify(mcpReferences || [])
     ) {
       return;
     }
@@ -4805,6 +5126,7 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
       text,
       skills,
       attachments,
+      mcpReferences,
       messageKey,
     });
   };
@@ -5017,6 +5339,7 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
         resolvedUser.text,
         resolvedUser.skills,
         resolvedUser.attachments,
+        resolvedUser.mcpReferences,
         message.messageKey,
       );
       continue;
@@ -5674,6 +5997,27 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
       flushProgress();
       const question =
         message.question || i18n.t("homeWorkspace.provideMoreInfo");
+      const structuredClarification = readStructuredClarificationPlan(
+        message.metadata,
+      );
+      if (structuredClarification) {
+        items.push({
+          kind: "structured_clarification",
+          question,
+          plan: structuredClarification,
+          messageKey: message.messageKey,
+        });
+        continue;
+      }
+      if (isPresentationBriefClarificationAwaitingCards(message)) {
+        flushProgress();
+        replaceManagedStatus(
+          STRUCTURED_CLARIFICATION_PENDING_TEXT,
+          message.messageKey,
+          { displayInTimeline: false },
+        );
+        continue;
+      }
       const previousMessage = index > 0 ? messages[index - 1] : null;
       const previousContent =
         previousMessage?.type === "agent_message"
@@ -5790,7 +6134,7 @@ function getManagedActivityTitle(
     if (item.kind === "managed_status" && item.text.trim()) return item.text;
     if (item.kind === "managed_tool" && item.toolName !== "complete_task") {
       return (
-        getManagedToolPurposeSummary(item.toolName, item.metadata) ||
+        getManagedToolTimelineTitle(item.toolName, item.metadata, item.status) ||
         item.summary?.trim() ||
         getManagedToolDisplayName(item.toolName) ||
         i18n.t("homeWorkspace.toolCall")
@@ -5942,6 +6286,7 @@ type DirectTurnDraft = {
   userText: string;
   skills?: TaskCreationPlatformSkill[];
   attachments?: UploadedTaskAttachment[];
+  mcpReferences?: TaskCreationMcpReference[];
   userMessageKey?: string;
   assistantParts: OpencodeTurnPart[];
   assistantPartIndex: Map<string, number>;
@@ -6014,12 +6359,14 @@ function createDirectTurnDraft(
   userText = "",
   skills?: TaskCreationPlatformSkill[],
   attachments?: UploadedTaskAttachment[],
+  mcpReferences?: TaskCreationMcpReference[],
   userMessageKey?: string,
 ): DirectTurnDraft {
   return {
     userText,
     skills,
     attachments,
+    mcpReferences,
     userMessageKey,
     assistantParts: [],
     assistantPartIndex: new Map<string, number>(),
@@ -6235,6 +6582,7 @@ function buildDirectOpencodeChatItems(messages: AgentMessage[]): ChatItem[] {
           resolvedUser.text,
           resolvedUser.skills,
           resolvedUser.attachments,
+          resolvedUser.mcpReferences,
           message.messageKey,
         ),
       );
@@ -6412,6 +6760,7 @@ function buildDirectOpencodeChatItems(messages: AgentMessage[]): ChatItem[] {
       userText: turn.userText,
       skills: turn.skills,
       attachments: turn.attachments,
+      mcpReferences: turn.mcpReferences,
       userMessageKey: turn.userMessageKey,
       assistantParts,
       working: turn.working,
@@ -6632,6 +6981,219 @@ function CodexExplanationMessage({
   );
 }
 
+function StructuredClarificationCardFlow({
+  item,
+  onSubmit,
+}: {
+  item: Extract<ChatItem, { kind: "structured_clarification" }>;
+  onSubmit?: (answer: string) => void;
+}) {
+  const [activeIndex, setActiveIndex] = useState(0);
+  const [answers, setAnswers] = useState<
+    Record<string, { selected: string[]; other: string; note: string; skipped?: boolean }>
+  >({});
+  const cards = item.plan.cards.slice(0, 4);
+  const activeCard = cards[Math.min(activeIndex, Math.max(0, cards.length - 1))];
+  const progress = cards.length > 0 ? Math.round(((activeIndex + 1) / cards.length) * 100) : 0;
+
+  if (!activeCard) return null;
+
+  const currentAnswer = answers[activeCard.id] || {
+    selected: activeCard.options.find((option) => option.recommended)?.id
+      ? [activeCard.options.find((option) => option.recommended)!.id]
+      : [],
+    other: "",
+    note: "",
+  };
+
+  const updateAnswer = (patch: Partial<typeof currentAnswer>) => {
+    setAnswers((current) => ({
+      ...current,
+      [activeCard.id]: {
+        ...currentAnswer,
+        ...patch,
+      },
+    }));
+  };
+
+  const toggleOption = (optionId: string) => {
+    if (activeCard.selectionMode === "multiple") {
+      const selected = currentAnswer.selected.includes(optionId)
+        ? currentAnswer.selected.filter((id) => id !== optionId)
+        : [...currentAnswer.selected, optionId];
+      updateAnswer({ selected, skipped: false });
+      return;
+    }
+    updateAnswer({ selected: [optionId], skipped: false });
+  };
+
+  const buildSubmittedBrief = (finalAnswers: typeof answers) => {
+    const lines = [
+      "已确认需求（结构化澄清选择）",
+      `来源：${item.plan.title}`,
+      "",
+    ];
+    for (const card of cards) {
+      const answer = finalAnswers[card.id];
+      if (!answer || answer.skipped) {
+        lines.push(`- ${card.title}：跳过，按推荐默认处理`);
+        continue;
+      }
+      const selectedLabels = answer.selected
+        .map((id) => card.options.find((option) => option.id === id && !option.isCustom)?.label)
+        .filter(Boolean);
+      const extra = [answer.other, answer.note].map((value) => value.trim()).filter(Boolean);
+      lines.push(
+        `- ${card.title}：${[...selectedLabels, ...extra].join("；") || "按推荐默认处理"}`,
+      );
+    }
+    lines.push("");
+    lines.push("请基于以上 confirmed brief 先规划，再执行任务。");
+    return lines.join("\n");
+  };
+
+  const customOption = activeCard.options.find((option) => option.isCustom);
+  const customSelected = Boolean(customOption && currentAnswer.selected.includes(customOption.id));
+  const customMissing = customSelected && !currentAnswer.other.trim();
+
+  const goNext = (skip = false) => {
+    if (!skip && customMissing) return;
+    const nextAnswers = {
+      ...answers,
+      [activeCard.id]: {
+        ...currentAnswer,
+        skipped: skip,
+        selected: skip ? [] : currentAnswer.selected,
+      },
+    };
+    setAnswers(nextAnswers);
+    if (activeIndex < cards.length - 1) {
+      setActiveIndex((value) => value + 1);
+      return;
+    }
+    onSubmit?.(buildSubmittedBrief(nextAnswers));
+  };
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.2 }}
+      className="w-full"
+      data-message-key={item.messageKey}
+    >
+      <div className="overflow-hidden rounded-xl border border-border/80 bg-card/95">
+        <div className="flex items-start justify-between gap-3 border-b border-border/70 px-4 py-3">
+          <div className="min-w-0">
+            <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+              需求确认
+            </div>
+            <div className="mt-1 text-sm font-semibold text-foreground">
+              {activeCard.title}
+            </div>
+            {activeCard.why ? (
+              <div className="mt-1 text-xs leading-5 text-muted-foreground">
+                {activeCard.why}
+              </div>
+            ) : null}
+          </div>
+          <div className="shrink-0 text-right">
+            <div className="text-[11px] font-semibold text-muted-foreground">
+              第 {activeIndex + 1} / {cards.length} 项
+            </div>
+            <div className="mt-1 text-[11px] font-semibold text-muted-foreground">
+              {progress}%
+            </div>
+          </div>
+        </div>
+
+        <div className="space-y-3 px-4 py-4">
+          <div className="text-sm font-medium leading-6 text-foreground">
+            {activeCard.question}
+          </div>
+          <div className="grid gap-2 md:grid-cols-2">
+            {activeCard.options.map((option) => {
+              const selected = currentAnswer.selected.includes(option.id);
+              return (
+                <button
+                  key={option.id}
+                  type="button"
+                  onClick={() => toggleOption(option.id)}
+                  className={`min-h-[64px] rounded-lg border px-3 py-2 text-left transition ${
+                    selected
+                      ? "border-ring bg-primary/5 shadow-[0_0_0_2px_rgba(9,105,218,0.10)]"
+                      : "border-border/70 bg-background/80 hover:bg-muted/40"
+                  }`}
+                >
+                  <div className="flex items-start gap-2">
+                    <span
+                      className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border ${
+                        selected ? "border-primary bg-primary text-primary-foreground" : "border-border"
+                      }`}
+                    >
+                      {selected ? <Check className="h-3 w-3" /> : null}
+                    </span>
+                    <span className="min-w-0">
+                      <span className="flex items-center gap-2 text-[13px] font-semibold text-foreground">
+                        {option.label}
+                        {option.recommended ? (
+                          <span className="rounded-full border border-border/70 bg-muted px-1.5 py-0.5 text-[10px] font-semibold text-muted-foreground">
+                            推荐
+                          </span>
+                        ) : null}
+                      </span>
+                      {option.description ? (
+                        <span className="mt-1 block text-xs leading-5 text-muted-foreground">
+                          {option.description}
+                        </span>
+                      ) : null}
+                      {option.isCustom && selected ? (
+                        <span className="mt-1 block text-xs leading-5 text-muted-foreground">
+                          选择后填写你的答案
+                        </span>
+                      ) : null}
+                    </span>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+
+          {customSelected ? (
+            <input
+              value={currentAnswer.other}
+              onChange={(event) => updateAnswer({ other: event.target.value, skipped: false })}
+              placeholder={activeCard.notePlaceholder || "输入你的自定义答案"}
+              className="h-9 w-full rounded-lg border border-border/70 bg-background/85 px-3 text-sm text-foreground outline-none transition focus:border-ring focus:ring-2 focus:ring-ring/15"
+            />
+          ) : null}
+        </div>
+
+        <div className="flex items-center justify-end gap-2 border-t border-border/70 px-4 py-3">
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="h-8 rounded-lg px-3 text-xs font-semibold"
+            onClick={() => goNext(true)}
+          >
+            跳过
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            className="h-8 rounded-lg px-4 text-xs font-semibold"
+            onClick={() => goNext(false)}
+            disabled={customMissing}
+          >
+            {activeIndex < cards.length - 1 ? "下一项" : "完成确认"}
+          </Button>
+        </div>
+      </div>
+    </motion.div>
+  );
+}
+
 function MessageBubble({
   item,
   onOpenDiffPreview,
@@ -6642,6 +7204,7 @@ function MessageBubble({
   hiddenGoogleConfirmationIds,
   onApproveGoogleWorkspaceConfirmation,
   onRejectGoogleWorkspaceConfirmation,
+  onSubmitStructuredClarification,
 }: {
   item: ChatItem;
   onOpenDiffPreview?: (options?: {
@@ -6667,6 +7230,7 @@ function MessageBubble({
   onRejectGoogleWorkspaceConfirmation?: (
     confirmation: GoogleWorkspaceConfirmationView,
   ) => Promise<void> | void;
+  onSubmitStructuredClarification?: (answer: string) => void;
 }) {
   if (item.kind === "opencode_turn") {
     return (
@@ -6677,23 +7241,27 @@ function MessageBubble({
         className="w-full space-y-4"
         data-message-key={item.messageKey}
       >
-        <div
-          className="w-full flex justify-end"
-          data-message-key={item.userMessageKey}
-        >
-          <div className="max-w-[80%] space-y-2 rounded-md bg-slate-900 px-3 py-2 text-sm text-white">
-            {item.skills?.length || item.attachments?.length ? (
-              <MessageAttachmentReference
+        <div className="w-full" data-message-key={item.userMessageKey}>
+          <div className="flex justify-end">
+            <div className="max-w-[80%] space-y-1.5 rounded-md bg-slate-900 px-3 py-2 text-sm text-white">
+              <MessageInlineReferences
                 skills={item.skills}
-                attachments={item.attachments}
+                mcpReferences={item.mcpReferences}
                 tone="inverse"
               />
-            ) : null}
-            {item.userText ? (
-              <span className="whitespace-pre-wrap break-words">
-                {item.userText}
-              </span>
-            ) : null}
+              {item.userText ? (
+                <span className="whitespace-pre-wrap break-words">
+                  {item.userText}
+                </span>
+              ) : null}
+            </div>
+          </div>
+          <div className="mt-1.5 flex justify-end">
+            <MessageAttachmentFiles
+              attachments={item.attachments}
+              sessionId={currentSessionId}
+              className="max-w-[80%]"
+            />
           </div>
         </div>
 
@@ -6833,6 +7401,15 @@ function MessageBubble({
     );
   }
 
+  if (item.kind === "structured_clarification") {
+    return (
+      <StructuredClarificationCardFlow
+        item={item}
+        onSubmit={onSubmitStructuredClarification}
+      />
+    );
+  }
+
   if (item.kind === "user") {
     return (
       <motion.div
@@ -6842,17 +7419,24 @@ function MessageBubble({
         className="w-full flex justify-end"
         data-message-key={item.messageKey}
       >
-        <div className="max-w-[80%] space-y-2 rounded-md bg-slate-900 px-3 py-2 text-sm text-white">
-          {item.skills?.length || item.attachments?.length ? (
-            <MessageAttachmentReference
+        <div className="flex max-w-[80%] flex-col items-end">
+          <div className="space-y-1.5 rounded-md bg-slate-900 px-3 py-2 text-sm text-white">
+            <MessageInlineReferences
               skills={item.skills}
-              attachments={item.attachments}
+              mcpReferences={item.mcpReferences}
               tone="inverse"
             />
-          ) : null}
-          {item.text ? (
-            <span className="whitespace-pre-wrap break-words">{item.text}</span>
-          ) : null}
+            {item.text ? (
+              <span className="whitespace-pre-wrap break-words">
+                {item.text}
+              </span>
+            ) : null}
+          </div>
+          <MessageAttachmentFiles
+            attachments={item.attachments}
+            sessionId={currentSessionId}
+            className="mt-1.5"
+          />
         </div>
       </motion.div>
     );
@@ -6951,6 +7535,9 @@ function MessageBubble({
         <TaskDeliverableCard
           sessionId={item.sessionId}
           deliverables={item.deliverables}
+          onOpenFiles={() =>
+            onOpenManagedReplay?.(item.runId, { view: "files" })
+          }
         />
       </div>
     );
@@ -7177,6 +7764,124 @@ function toRecord(value: unknown): Record<string, unknown> {
 
 function asText(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function readStructuredClarificationPlan(
+  metadataRaw: unknown,
+): StructuredClarificationCardPlan | null {
+  const metadata = toRecord(metadataRaw);
+  const rawPlan =
+    toRecord(metadata.structuredClarification).kind === "structured_clarification"
+      ? metadata.structuredClarification
+      : toRecord(toRecord(metadata.result).structuredClarification).kind ===
+          "structured_clarification"
+        ? toRecord(metadata.result).structuredClarification
+        : null;
+  const plan = toRecord(rawPlan);
+  if (plan.kind !== "structured_clarification") return null;
+  const cards = (Array.isArray(plan.cards) ? plan.cards : [])
+    .map((rawCard) => {
+      const card = toRecord(rawCard);
+      const options = (Array.isArray(card.options) ? card.options : [])
+        .map((rawOption) => {
+          const option = toRecord(rawOption);
+          const id = asText(option.id);
+          const label = asText(option.label);
+          if (!id || !label) return null;
+          return {
+            id,
+            label,
+            description: asText(option.description),
+            impact: asText(option.impact),
+            recommended: Boolean(option.recommended),
+          } satisfies StructuredClarificationOption;
+        })
+        .filter((item) => Boolean(item)) as StructuredClarificationOption[];
+      const limitedOptions = ensureStructuredClarificationCardOptions(
+        options,
+        asText(card.notePlaceholder),
+      );
+      const id = asText(card.id);
+      const title = asText(card.title);
+      const question = asText(card.question);
+      if (!id || !title || !question || limitedOptions.length < 4) return null;
+      return {
+        id,
+        title,
+        question,
+        why: asText(card.why),
+        selectionMode: asText(card.selectionMode) === "multiple" ? "multiple" : "single",
+        required: card.required !== false,
+        options: limitedOptions,
+        allowOther: true,
+        allowNote: false,
+        notePlaceholder: asText(card.notePlaceholder),
+      } satisfies StructuredClarificationCard;
+    })
+    .filter((item) => Boolean(item)) as StructuredClarificationCard[];
+  const limitedCards = cards.slice(0, 4);
+  if (limitedCards.length === 0) return null;
+  return {
+    kind: "structured_clarification",
+    taskType:
+      plan.taskType === "report" ||
+      plan.taskType === "website" ||
+      plan.taskType === "generic"
+        ? plan.taskType
+        : "ppt",
+    title: asText(plan.title) || "补充关键需求",
+    summary: asText(plan.summary),
+    maxCards: 4,
+    cards: limitedCards,
+    briefFields: Array.isArray(plan.briefFields)
+      ? plan.briefFields.map((item) => asText(item)).filter(Boolean)
+      : limitedCards.map((card) => card.id),
+  };
+}
+
+function isPresentationBriefClarificationAwaitingCards(message: AgentMessage): boolean {
+  if (message.type !== "clarification_request") return false;
+  const metadata = toRecord(message.metadata);
+  return (
+    asText(metadata.clarificationType) === "presentation_brief" &&
+    !readStructuredClarificationPlan(metadata)
+  );
+}
+
+function ensureStructuredClarificationCardOptions(
+  options: StructuredClarificationOption[],
+  customPlaceholder?: string,
+) {
+  const generated = options
+    .filter((option) => !option.isCustom)
+    .slice(0, 3)
+    .map((option, index) => ({
+      ...option,
+      recommended: index === 0,
+      isCustom: false,
+    }));
+  while (generated.length < 3) {
+    const index = generated.length;
+    generated.push({
+      id: `generated_default_${index + 1}`,
+      label: ["按推荐方案", "先快速推进", "先保证质量"][index] || "按推荐方案",
+      description: ["质量和速度均衡", "尽快得到初版", "增加规划和验证"][index] || "按常规路径处理",
+      impact: "Altus 会按该方向继续执行。",
+      recommended: index === 0,
+      isCustom: false,
+    });
+  }
+  return [
+    ...generated,
+    {
+      id: "custom_answer",
+      label: "自定义补充",
+      description: customPlaceholder || "填写自己的答案",
+      impact: "Altus 会按你的自定义内容调整执行。",
+      recommended: false,
+      isCustom: true,
+    },
+  ];
 }
 
 function isHiddenMcpConfirmationUserMessage(
@@ -8025,12 +8730,14 @@ function OpencodeToolCard({
   );
 
   if (
-    googleConfirmation &&
-    !hiddenGoogleConfirmationIds?.includes(googleConfirmation.confirmationId)
+    shouldRenderGoogleWorkspaceConfirmation({
+      confirmation: googleConfirmation,
+      hiddenConfirmationIds: hiddenGoogleConfirmationIds,
+    })
   ) {
     return (
       <GoogleWorkspaceConfirmationPanel
-        confirmation={googleConfirmation}
+        confirmation={googleConfirmation!}
         currentSessionId={currentSessionId}
         compact
         onApprove={onApproveGoogleWorkspaceConfirmation}
@@ -8652,9 +9359,15 @@ function getManagedToolIcon(toolName: string): LucideIcon {
   if (toolName === "write_file") return FilePenLine;
   if (toolName === "read_file") return FileText;
   if (toolName === "search_code") return Search;
+  if (toolName === "web_search") return Search;
+  if (toolName === "web_extract") return FileSearch;
   if (toolName === "list_directory") return FolderSearch2;
   if (toolName === "ask_user") return Sparkles;
   return FileSearch;
+}
+
+function isManagedWebResearchTool(toolName: string) {
+  return toolName === "web_search" || toolName === "web_extract";
 }
 
 function ManagedActivityGroup({
@@ -8794,20 +9507,25 @@ function ManagedActivityToolRow({
   ) => Promise<void> | void;
 }) {
   const Icon = getManagedToolIcon(item.toolName);
+  const isWebToolRunning =
+    item.status === "running" && isManagedWebResearchTool(item.toolName);
+  const RowIcon = isWebToolRunning ? Loader2 : Icon;
   const googleConfirmation = readGoogleWorkspaceConfirmation(item.metadata);
   const title =
-    getManagedToolPurposeSummary(item.toolName, item.metadata) ||
+    getManagedToolTimelineTitle(item.toolName, item.metadata, item.status) ||
     item.summary?.trim() ||
     getManagedToolDisplayName(item.toolName);
   const statusUi = getManagedToolStatusPresentation(item.status);
 
   if (
-    googleConfirmation &&
-    !hiddenGoogleConfirmationIds?.includes(googleConfirmation.confirmationId)
+    shouldRenderGoogleWorkspaceConfirmation({
+      confirmation: googleConfirmation,
+      hiddenConfirmationIds: hiddenGoogleConfirmationIds,
+    })
   ) {
     return (
       <GoogleWorkspaceConfirmationPanel
-        confirmation={{ ...googleConfirmation, agentRunId: item.runId }}
+        confirmation={{ ...googleConfirmation!, agentRunId: item.runId }}
         currentSessionId={currentSessionId}
         compact
         onApprove={onApproveGoogleWorkspaceConfirmation}
@@ -8831,7 +9549,9 @@ function ManagedActivityToolRow({
           <span
             className={`inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md ${statusUi.iconClass}`}
           >
-            <Icon className="h-3.5 w-3.5" />
+            <RowIcon
+              className={`h-3.5 w-3.5 ${isWebToolRunning ? "animate-spin" : ""}`}
+            />
           </span>
           <span className="truncate text-[13px] text-muted-foreground" title={title}>
             {title}
@@ -9022,6 +9742,12 @@ function ManagedToolCard({
 }) {
   const displayName = getManagedToolDisplayName(item.toolName);
   const Icon = getManagedToolIcon(item.toolName);
+  const isWebToolRunning =
+    item.status === "running" && isManagedWebResearchTool(item.toolName);
+  const ToolIcon = isWebToolRunning ? Loader2 : Icon;
+  const timelineTitle =
+    getManagedToolTimelineTitle(item.toolName, item.metadata, item.status) ||
+    displayName;
   const googleConfirmation = readGoogleWorkspaceConfirmation(item.metadata);
   const statusLabel =
     item.status === "failed"
@@ -9072,12 +9798,14 @@ function ManagedToolCard({
   }, [isWriteFileExpanded, writeFilePreview]);
 
   if (
-    googleConfirmation &&
-    !hiddenGoogleConfirmationIds?.includes(googleConfirmation.confirmationId)
+    shouldRenderGoogleWorkspaceConfirmation({
+      confirmation: googleConfirmation,
+      hiddenConfirmationIds: hiddenGoogleConfirmationIds,
+    })
   ) {
     return (
       <GoogleWorkspaceConfirmationPanel
-        confirmation={{ ...googleConfirmation, agentRunId: item.runId }}
+        confirmation={{ ...googleConfirmation!, agentRunId: item.runId }}
         currentSessionId={currentSessionId}
         onApprove={onApproveGoogleWorkspaceConfirmation}
         onReject={onRejectGoogleWorkspaceConfirmation}
@@ -9179,7 +9907,9 @@ function ManagedToolCard({
                       <span
                         className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full shadow-sm ${statusUi.iconClass}`}
                       >
-                        <Icon className="h-3.5 w-3.5" />
+                        <ToolIcon
+                          className={`h-3.5 w-3.5 ${isWebToolRunning ? "animate-spin" : ""}`}
+                        />
                       </span>
                       <div className="min-w-0">
                         <div className="text-[12px] font-medium leading-5">
@@ -9216,11 +9946,13 @@ function ManagedToolCard({
                 <span
                   className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full shadow-sm ${statusUi.iconClass}`}
                 >
-                  <Icon className="h-3.5 w-3.5" />
+                  <ToolIcon
+                    className={`h-3.5 w-3.5 ${isWebToolRunning ? "animate-spin" : ""}`}
+                  />
                 </span>
                 <span className="min-w-0 flex items-center gap-2 overflow-hidden">
                   <span className="shrink-0 text-[11px] font-medium leading-5">
-                    {displayName}
+                    {timelineTitle}
                   </span>
                   <span
                     className={`shrink-0 rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${statusUi.badgeClass}`}
@@ -9247,7 +9979,9 @@ function ManagedToolCard({
               <div
                 className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-xl shadow-sm ${statusUi.iconClass}`}
               >
-                <Icon className="h-4 w-4" />
+                <ToolIcon
+                  className={`h-4 w-4 ${isWebToolRunning ? "animate-spin" : ""}`}
+                />
               </div>
               <div className="min-w-0">
                 <div className="flex items-center gap-2">
@@ -9363,6 +10097,8 @@ function extractManagedDeliverables(
     const id = asText(record.id);
     const name = asText(record.name);
     if (!id || !name || unique.has(id)) continue;
+    const deliverablePath = asText(record.path);
+    if (isManagedInternalSupportArtifact(deliverablePath)) continue;
     const sizeValue =
       typeof record.size === "number"
         ? record.size
@@ -9372,7 +10108,7 @@ function extractManagedDeliverables(
     unique.set(id, {
       id,
       runId: asText(record.runId) || asText(metadata.runId),
-      path: asText(record.path),
+      path: deliverablePath,
       name,
       mimeType: asText(record.mimeType) || "application/octet-stream",
       size: Number.isFinite(sizeValue) ? sizeValue : 0,
@@ -9396,6 +10132,7 @@ function collectManagedWebArtifacts(input: {
       .trim()
       .replace(/\\/g, "/");
     if (!path) return;
+    if (isManagedInternalSupportArtifact(path)) return;
     const resolvedPreviewType =
       previewType || inferManagedArtifactPreviewType(path);
     if (resolvedPreviewType !== "web") return;
@@ -9414,6 +10151,14 @@ function collectManagedWebArtifacts(input: {
   }
 
   return Array.from(unique.values());
+}
+
+function hasDownloadableManagedDeliverables(
+  deliverables: TaskCreationDeliverableArtifact[],
+) {
+  return deliverables.some(
+    (deliverable) => inferManagedArtifactPreviewType(deliverable.path) !== "web",
+  );
 }
 
 function extractManagedPreviewSnapshot(
@@ -9543,9 +10288,21 @@ export function buildManagedCompletionCardItem(input: {
     managedArtifacts,
   });
   const shouldEmitFromDeliverablesContext = deliverables.length > 0;
+  const hasDownloadableDeliverables = hasDownloadableManagedDeliverables(deliverables);
   const hasPreviewSnapshot = Boolean(previewSnapshot);
   const isRunCompletedContext =
     message.type === "status_update" && eventType === "run_completed";
+  if (hasDownloadableDeliverables) {
+    emittedManagedCompletionRuns.add(runId);
+    return {
+      kind: "managed_deliverable_card",
+      sessionId,
+      runId,
+      deliverables,
+      messageKey: `managed:${runId}:deliverable_card`,
+    };
+  }
+
   if (
     (shouldEmitFromDeliverablesContext || isRunCompletedContext || hasPreviewSnapshot) &&
     (webArtifacts.length > 0 || hasPreviewSnapshot)
@@ -9624,11 +10381,17 @@ function readManagedToolViewProjection(metadataRaw: unknown) {
 
 function readGoogleWorkspaceConfirmation(metadataRaw: unknown) {
   const metadata = toRecord(metadataRaw);
-  return toGoogleWorkspaceConfirmationView(
+  const confirmation = toGoogleWorkspaceConfirmationView(
     extractGoogleWorkspaceConfirmationPayload(
       parseManagedToolOutputPreview(metadata.outputPreview),
     ),
   );
+  if (!confirmation) return null;
+  const statuses = toRecord(metadata.mcpToolConfirmationStatuses);
+  return {
+    ...confirmation,
+    status: normalizeMcpConfirmationStatus(statuses[confirmation.confirmationId]),
+  };
 }
 
 function readGoogleWorkspaceConfirmationFromOpencodeEvent(input: {
@@ -9647,7 +10410,15 @@ function readGoogleWorkspaceConfirmationFromOpencodeEvent(input: {
     input.output,
     input.content,
   ]);
-  return toGoogleWorkspaceConfirmationView(payload);
+  const confirmation = toGoogleWorkspaceConfirmationView(payload);
+  if (!confirmation) return null;
+  const statuses = toRecord(input.metadata?.mcpToolConfirmationStatuses);
+  return {
+    ...confirmation,
+    status:
+      normalizeMcpConfirmationStatus(statuses[confirmation.confirmationId]) ||
+      normalizeMcpConfirmationStatus(toRecord(payload).status),
+  };
 }
 
 function extractGoogleWorkspaceConfirmationPayload(
@@ -9726,6 +10497,7 @@ function toGoogleWorkspaceConfirmationView(
     target: asText(summary.target),
     impact: asText(summary.impact),
     parameterSummary: toRecord(summary.parameterSummary),
+    status: normalizeMcpConfirmationStatus(direct.status),
   };
 }
 
@@ -10189,7 +10961,7 @@ export function getManagedToolPurposeSummary(
   metadataRaw: unknown,
 ) {
   const metadata = toRecord(metadataRaw);
-  const args = toRecord(metadata.arguments);
+  const args = readManagedToolArguments(metadata);
   const output = parseManagedToolOutputPreview(metadata.outputPreview);
   const progress = readManagedWriteFileProgress(metadata);
   const path = asText(args.path) || asText(output.path) || progress.path;
@@ -10233,6 +11005,14 @@ export function getManagedToolPurposeSummary(
     return "搜索项目代码";
   }
 
+  if (toolName === "web_search") {
+    return formatManagedWebSearchTitle(metadata, "idle");
+  }
+
+  if (toolName === "web_extract") {
+    return formatManagedWebExtractTitle(metadata, "idle");
+  }
+
   if (toolName === "todowrite") {
     const todos = readManagedTodoItems(metadataRaw);
     const activeTodo = todos.find((todo) => todo.status === "in_progress");
@@ -10271,6 +11051,119 @@ export function getManagedToolPurposeSummary(
   return getManagedToolDisplayName(toolName);
 }
 
+export function getManagedToolTimelineTitle(
+  toolName: string,
+  metadataRaw: unknown,
+  status?: string,
+) {
+  const phase =
+    status === "running"
+      ? "running"
+      : status === "completed"
+        ? "completed"
+        : "idle";
+  const metadata = toRecord(metadataRaw);
+  if (toolName === "web_search") {
+    return formatManagedWebSearchTitle(metadata, phase);
+  }
+  if (toolName === "web_extract") {
+    return formatManagedWebExtractTitle(metadata, phase);
+  }
+  return getManagedToolPurposeSummary(toolName, metadataRaw);
+}
+
+function readManagedToolArguments(metadataRaw: unknown) {
+  const metadata = toRecord(metadataRaw);
+  const args = toRecord(metadata.arguments);
+  if (Object.keys(args).length > 0) return args;
+  const rawArguments = parseManagedToolOutputPreview(metadata.rawArguments);
+  if (Object.keys(rawArguments).length > 0) return rawArguments;
+  return {};
+}
+
+function readStringList(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.map((item) => asText(item)).filter(Boolean);
+  }
+  const text = asText(value);
+  if (!text) return [];
+  if (text.startsWith("[") && text.endsWith("]")) {
+    try {
+      const parsed = JSON.parse(text) as unknown;
+      if (Array.isArray(parsed)) {
+        return parsed.map((item) => asText(item)).filter(Boolean);
+      }
+    } catch {
+      return [text];
+    }
+  }
+  return [text];
+}
+
+function compactManagedToolSubject(value: string, maxLength = 58) {
+  const text = value.replace(/\s+/g, " ").trim();
+  if (text.length <= maxLength) return text;
+  return `${text.slice(0, Math.max(0, maxLength - 1))}…`;
+}
+
+function formatManagedUrlSubject(url: string) {
+  try {
+    const parsed = new URL(url);
+    return parsed.hostname.replace(/^www\./, "") || url;
+  } catch {
+    return compactManagedToolSubject(url, 44);
+  }
+}
+
+function readManagedWebToolContext(metadataRaw: unknown) {
+  const metadata = toRecord(metadataRaw);
+  const args = readManagedToolArguments(metadata);
+  const output = parseManagedToolOutputPreview(metadata.outputPreview);
+  const query = asText(args.query) || asText(output.query);
+  const urls = Array.from(
+    new Set([
+      ...readStringList(args.urls),
+      ...readStringList(output.urls),
+    ].filter(Boolean)),
+  );
+  return {
+    query: compactManagedToolSubject(query),
+    urls,
+    firstUrlLabel: urls[0] ? formatManagedUrlSubject(urls[0]) : "",
+  };
+}
+
+function formatManagedWebSearchTitle(
+  metadataRaw: unknown,
+  phase: "running" | "completed" | "idle",
+) {
+  const { query } = readManagedWebToolContext(metadataRaw);
+  const prefix =
+    phase === "running"
+      ? "正在联网搜索"
+      : phase === "completed"
+        ? "已联网搜索"
+        : "联网搜索";
+  return query ? `${prefix}：${query}` : `${prefix}内容`;
+}
+
+function formatManagedWebExtractTitle(
+  metadataRaw: unknown,
+  phase: "running" | "completed" | "idle",
+) {
+  const { urls, firstUrlLabel } = readManagedWebToolContext(metadataRaw);
+  const prefix =
+    phase === "running"
+      ? "正在解析网页内容"
+      : phase === "completed"
+        ? "已解析网页内容"
+        : "解析网页内容";
+  if (firstUrlLabel && urls.length > 1) {
+    return `${prefix}：${firstUrlLabel} 等 ${urls.length} 个页面`;
+  }
+  return firstUrlLabel ? `${prefix}：${firstUrlLabel}` : prefix;
+}
+
 function extractManagedArtifactPath(
   toolName: string,
   metadataRaw: unknown,
@@ -10296,6 +11189,10 @@ function getManagedToolDisplayName(toolName: string) {
       return i18n.t("homeWorkspace.listDirectory");
     case "search_code":
       return i18n.t("homeWorkspace.codeSearch");
+    case "web_search":
+      return "联网搜索";
+    case "web_extract":
+      return "解析网页内容";
     case "ask_user":
       return i18n.t("homeWorkspace.requestClarification");
     case "debug_open_page":
@@ -10410,7 +11307,7 @@ function getTodoStatusTone(status: string) {
 
 function formatManagedToolSummary(toolName: string, metadataRaw: unknown) {
   const metadata = toRecord(metadataRaw);
-  const args = toRecord(metadata.arguments);
+  const args = readManagedToolArguments(metadata);
   const writeFileProgress = readManagedWriteFileProgress(metadata);
   const deploymentOutput = readManagedDeploymentToolOutput(metadata);
   const projectedView = readManagedToolViewProjection(metadata);
@@ -10448,6 +11345,12 @@ function formatManagedToolSummary(toolName: string, metadataRaw: unknown) {
     const query = asText(args.query);
     const target = asText(args.path);
     return [query, target ? `@ ${target}` : ""].filter(Boolean).join(" ");
+  }
+  if (toolName === "web_search") {
+    return formatManagedWebSearchTitle(metadata, "idle");
+  }
+  if (toolName === "web_extract") {
+    return formatManagedWebExtractTitle(metadata, "idle");
   }
   if (toolName === "todowrite") {
     const todos = readManagedTodoItems(metadataRaw);
@@ -10499,7 +11402,7 @@ function formatManagedToolSummary(toolName: string, metadataRaw: unknown) {
 
 function formatManagedToolPreview(toolName: string, metadataRaw: unknown) {
   const metadata = toRecord(metadataRaw);
-  const args = toRecord(metadata.arguments);
+  const args = readManagedToolArguments(metadata);
   const output = parseManagedToolOutputPreview(metadata.outputPreview);
   const writeFileProgress = readManagedWriteFileProgress(metadata);
   const error = asText(metadata.error);
@@ -10575,6 +11478,26 @@ function formatManagedToolPreview(toolName: string, metadataRaw: unknown) {
       i18n.t("homeWorkspace.returnedSearchResults")
     );
   }
+  if (toolName === "web_search") {
+    const results = Array.isArray(output.results) ? output.results : [];
+    const titles = results
+      .map((item) => asText(toRecord(item).title) || asText(toRecord(item).url))
+      .filter(Boolean)
+      .slice(0, 4);
+    return titles.length > 0
+      ? titles.map((item) => `- ${item}`).join("\n")
+      : formatManagedWebSearchTitle(metadata, "idle");
+  }
+  if (toolName === "web_extract") {
+    const results = Array.isArray(output.results) ? output.results : [];
+    const urls = results
+      .map((item) => asText(toRecord(item).url))
+      .filter(Boolean)
+      .slice(0, 4);
+    return urls.length > 0
+      ? urls.map((item) => `- ${item}`).join("\n")
+      : formatManagedWebExtractTitle(metadata, "idle");
+  }
   if (toolName === "todowrite") {
     const todos = readManagedTodoItems(metadataRaw);
     if (todos.length === 0) {
@@ -10622,7 +11545,7 @@ function formatManagedToolInternalDetail(
 
 function formatManagedToolDetail(toolName: string, metadataRaw: unknown) {
   const metadata = toRecord(metadataRaw);
-  const args = toRecord(metadata.arguments);
+  const args = readManagedToolArguments(metadata);
   const output = parseManagedToolOutputPreview(metadata.outputPreview);
   const writeFileProgress = readManagedWriteFileProgress(metadata);
   const error = asText(metadata.error);
@@ -10729,6 +11652,27 @@ function formatManagedToolDetail(toolName: string, metadataRaw: unknown) {
       args.path || output.path,
     );
     pushLine(i18n.t("homeWorkspace.resultPreviewLabel"), output.output);
+  } else if (toolName === "web_search") {
+    const results = Array.isArray(output.results) ? output.results : [];
+    pushLine("搜索内容", args.query || output.query);
+    pushLine("搜索深度", args.searchDepth || output.searchDepth);
+    pushLine("结果数量", results.length > 0 ? String(results.length) : "");
+    pushLine(
+      i18n.t("homeWorkspace.resultPreviewLabel"),
+      formatManagedToolPreview(toolName, metadata),
+    );
+  } else if (toolName === "web_extract") {
+    const urls = readManagedWebToolContext(metadata).urls;
+    const failedResults = Array.isArray(output.failedResults)
+      ? output.failedResults.length
+      : 0;
+    pushLine("解析网页", urls.join("\n"));
+    pushLine("解析深度", args.extractDepth || output.extractDepth);
+    pushLine("失败数量", failedResults > 0 ? String(failedResults) : "");
+    pushLine(
+      i18n.t("homeWorkspace.resultPreviewLabel"),
+      formatManagedToolPreview(toolName, metadata),
+    );
   } else if (toolName === "todowrite") {
     const todos = readManagedTodoItems(metadataRaw);
     pushLine(

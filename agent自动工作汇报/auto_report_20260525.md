@@ -1,5 +1,60 @@
 # auto_report_20260525
 
+## Settings Connectors 空白页修复
+
+做了什么：
+
+1. 已将 `task-creation-agent` 分支推送到远端。
+2. 排查设置页 `Connectors` 面板，确认风险点在前端把连接器目录展示绑定到 `/api/connectors/me` 用户 profile 快照，快照异常或空返回时会让应用目录看起来像空白。
+3. 调整 `ConnectorCenterPanel`：先独立加载 `/api/connectors/catalog` 作为目录展示源，再用 `/api/connectors/me` 补齐 profile、授权状态和默认选择。
+4. 补齐连接器目录 loading、error、无目录和无搜索结果状态，避免只显示标题与搜索框的空白面板。
+5. 针对用户反馈的 Network 响应空白现象，给连接器路由增加 `no-store/no-cache` 响应头，并让前端连接器请求使用 `cache: no-store`，避免 304/空响应体导致 `response.json()` 解析失败。
+6. 更新连接器设计文档，明确目录和用户 profile 快照的前端加载边界。
+
+验证结果：
+
+1. `pnpm --filter web exec vitest run src/tests/connector-center-panel.test.ts`：24/24 通过。
+2. `pnpm --filter web check`：通过。
+3. `TMPDIR=/private/tmp pnpm --filter api exec tsx --test tests/connector-routes.test.ts`：9/9 通过。
+4. `pnpm --filter api type-check`：通过。
+5. Playwright 打开 `http://localhost:3000/home` -> 设置 -> `Connectors`，确认页面显示 GitHub、Notion、Slack、Supabase、Figma、Google Workspace、Vercel 等连接器卡片；`/api/connectors/catalog` 返回 200、响应体非空且带 `cache-control: no-store, no-cache, must-revalidate, proxy-revalidate`。
+6. `git diff --check`：通过。
+
+## GitHub 连接器重新授权连续性修复
+
+做了什么：
+
+1. 排查 GitHub 连接器重新授权失败，确认截图中的 `Invalid API key: ak_oGrDd****` 来自服务端 Composio API key 被上游拒绝，不是当前 GitHub 用户 OAuth 回调失败。
+2. 调整 Composio 授权启动失败处理：如果上游返回 API key/401/403 类错误，当前登录账号的 profile 会被写回 `needs_auth`，清理不可用 secret，并记录 `lastError` 与 `connectionStatus=start_failed`。
+3. 统一 OAuth 卡片现在会显示 GitHub profile 的 `lastError`，并且存在 profile 但未授权时按钮显示“重新连接”，避免用户看不到真实状态。
+4. 文档补充账号隔离和服务端 Composio key 失效时的状态回写要求。
+
+验证结果：
+
+1. `TMPDIR=/private/tmp pnpm --filter api exec tsx --test --test-name-pattern "Composio key is invalid" tests/user-connector-service.test.ts`：通过。
+2. `pnpm --filter web exec vitest run src/tests/connector-center-panel.test.ts`：24/24 通过。
+3. `pnpm --filter api type-check`：通过。
+4. `pnpm --filter web check`：通过。
+
+剩余风险：
+
+1. 整份 `tests/user-connector-service.test.ts` 的 25 个子测试都输出 `ok`，但测试文件存在旧的未关闭句柄导致进程不自然退出；本轮用新增聚焦用例获取了干净退出码。
+
+## Composio GitHub Callback 本地端口修复
+
+做了什么：
+
+1. 排查 GitHub 授权成功后跳到 `http://localhost:4000/github/callback` 并出现 `Cannot GET /github/callback` 的问题。
+2. 确认根因是 `.env.localhost` 将 `COMPOSIO_OAUTH_CALLBACK_BASE_URL` 配到了 API 端口，而连接器 callback 由前端 SPA 处理。
+3. 将 `.env.localhost` 的 `COMPOSIO_OAUTH_CALLBACK_BASE_URL` 改为 `http://localhost:3000`。
+4. 给 API 根路径补充 `/github/callback`、`/notion/callback`、`/supabase/callback`、`/slack/callback`、`/figma/callback`、`/google-super/callback`、`/vercel/callback` 兜底 302，保留 query 原样跳回前端。
+
+验证结果：
+
+1. `TMPDIR=/private/tmp pnpm --filter api exec tsx --test tests/connector-routes.test.ts tests/composio-oauth-callback-url.test.ts`：14/14 通过。
+2. `pnpm --filter api type-check`：通过。
+3. `git diff --check`：通过。
+
 ## 调试浏览器共用链路继续修复
 
 做了什么：
@@ -76,3 +131,21 @@
 3. `TMPDIR=/private/tmp pnpm --filter api exec tsx --test tests/sandbox-debug-service.test.ts`：17/17 通过。
 4. `pnpm --filter api type-check`：通过。
 5. 真实 sandbox `ifejcjlfezwwlt41lrxyh` 验证：修复后的 `ensureNekoDebug()` 返回 `ready=true`、`status=running`、`url=https://8081-ifejcjlfezwwlt41lrxyh.e2b.app`。
+
+## 会话消息乱序稳定化
+
+做了什么：
+
+1. 排查 recent/history、Redis 页面缓存、DB timeline 与前端合并逻辑，确认乱序风险来自展示层没有始终把 `timeline_cursor` 当作第一排序事实源。
+2. 后端 `messages/recent` / `messages/history` 的游标计算改为优先使用 top-level `timelineCursor` / `metadata.timelineCursor`，旧数据缺失时再退回 `sessionEventSeq`、时间戳和 `createdAt`。
+3. 后端 timeline 响应补齐 `timelineCursor` 透传，避免前端只能依赖时间戳推断顺序。
+4. 前端历史合并和实时追加增加稳定排序：双方都有可比较 timeline cursor 时按 cursor 排序；缺失 cursor 的旧消息保持原相对顺序，避免强行误排。
+5. 更新 recent/history 设计文档，明确前后端展示排序也必须以 `timeline_cursor` 为第一依据。
+
+验证结果：
+
+1. `pnpm --filter web exec vitest run src/tests/managed-mixed-timeline-render.test.ts`：4/4 通过。
+2. `pnpm --filter api type-check`：通过。
+3. `pnpm --filter web exec tsc --noEmit`：首次发现 metadata 类型收窄问题，修复后复跑通过。
+4. `pnpm --filter web check`：通过。
+5. `git diff --check`：通过。

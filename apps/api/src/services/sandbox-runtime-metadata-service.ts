@@ -10,6 +10,7 @@ import {
   type SandboxOsacExecutor,
 } from './sandbox-osac-bridge-service';
 import { writeConnectorDebugLog } from '../utils/connector-debug-log';
+import { platformRuntimeArtifactService } from './platform-runtime-artifact-service';
 
 function asText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
@@ -140,11 +141,15 @@ export async function ensureSandboxRuntimeMetadata(
   }
 
   if ((asText(metadata.sandboxProvider) || 'e2b') === 'e2b') {
+    const expectedOsacSpec = await platformRuntimeArtifactService.getPublishedOsacDownloadSpec();
+    const currentOsacSha256 = asText(metadata.osacBinarySha256) || asText(asObject(metadata.osac).sha256);
     const reusableBridge = options?.forceBridgeRestart
       ? false
       : await canReuseOsacBridge({
           endpoint: osacEndpoint,
           authToken: osacAuthToken,
+          currentSha256: currentOsacSha256,
+          expectedSha256: expectedOsacSpec.sha256,
         });
     writeConnectorDebugLog('[SANDBOX_RUNTIME_METADATA_BRIDGE_CHECK]', {
       orchestratorSessionId,
@@ -152,6 +157,9 @@ export async function ensureSandboxRuntimeMetadata(
       executor: resolveExecutor(metadata),
       osacEndpoint: osacEndpoint || null,
       hasOsacAuthToken: Boolean(osacAuthToken),
+      currentOsacSha256: currentOsacSha256 || null,
+      expectedOsacSha256: expectedOsacSpec.sha256,
+      expectedOsacVersion: expectedOsacSpec.version,
       reusableBridge,
     });
     if (reusableBridge) {
@@ -179,13 +187,16 @@ export async function ensureSandboxRuntimeMetadata(
         workspaceRoot,
         authToken: osacAuthToken || undefined,
         codexPath: asText(metadata.codexBinaryPath) || undefined,
-        forceBinaryRewrite: Boolean(options?.forceBinaryRewrite),
+        forceBinaryRewrite: Boolean(options?.forceBinaryRewrite) || currentOsacSha256 !== expectedOsacSpec.sha256,
       });
       osacEndpoint = bridge.osacEndpoint;
       osacHost = bridge.osacHost;
       osacHostPort = osacBootstrapConfig.osacPort;
       osacConnectionMode = 'direct';
       osacAuthToken = bridge.osacAuthToken;
+      metadata.osacBinaryVersion = bridge.osacVersion;
+      metadata.osacBinarySha256 = bridge.osacSha256;
+      metadata.osacBinaryObjectKey = bridge.osacObjectKey;
       needsMetadataUpdate = true;
       try {
         await waitForOsacBridgeReady({

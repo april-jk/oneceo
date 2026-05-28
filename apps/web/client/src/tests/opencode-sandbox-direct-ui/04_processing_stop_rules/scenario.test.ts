@@ -19,6 +19,23 @@ describe('04_processing_stop_rules', () => {
     expect(shouldStopProcessingForMessage(completedStatus)).toBe(true);
   });
 
+  it('keeps processing while PPT clarification cards are still being generated', () => {
+    const pendingPptClarification: AgentMessage = {
+      type: 'clarification_request',
+      question: '这份 PPT 开始制作前，先确认 4 个关键决策。',
+      metadata: {
+        clarificationType: 'presentation_brief',
+      },
+    };
+
+    expect(shouldStopProcessingForMessage(pendingPptClarification)).toBe(false);
+    expect(deriveSessionStateFromMessages([pendingPptClarification])).toEqual({
+      stopProcessing: false,
+      runtimeStatus: null,
+      currentQuestion: null,
+    });
+  });
+
   it('returns true for terminal opencode events', () => {
     const finalMsg: AgentMessage = {
       type: 'opencode_event',

@@ -1042,6 +1042,11 @@ private async chargeForModelCall(state: AltusRunState, input: {
       : undefined;
   }
 
+  private resolvePreExecutionStructuredClarification(state: AltusRunState) {
+    const profile = state.input.taskIntentProfile;
+    return profile?.needsClarification ? profile.structuredClarification : undefined;
+  }
+
   private async finalizePlainTextConversationCompletion(
     state: AltusRunState,
     assistantContent: string,
@@ -1749,6 +1754,7 @@ private async chargeForModelCall(state: AltusRunState, input: {
       question: string;
       options?: string[];
       clarificationType?: Exclude<AltusManagedTaskIntentProfile['clarificationType'], 'none'>;
+      structuredClarification?: AltusManagedTaskIntentProfile['structuredClarification'];
       toolCallId?: string;
     }
   ) {
@@ -1775,6 +1781,7 @@ private async chargeForModelCall(state: AltusRunState, input: {
         question: input.question,
         options: input.options,
         clarificationType: input.clarificationType,
+        structuredClarification: input.structuredClarification,
         runId: state.input.runId,
         toolCallId: input.toolCallId,
       },
@@ -1789,6 +1796,7 @@ private async chargeForModelCall(state: AltusRunState, input: {
       question: input.question,
       options: input.options,
       clarificationType: input.clarificationType,
+      structuredClarification: input.structuredClarification,
       content: input.question,
       messageKey: clarificationMessageKey,
       toolName: input.toolCallId ? 'ask_user' : undefined,
@@ -3026,16 +3034,19 @@ private async chargeForModelCall(state: AltusRunState, input: {
                 : null;
             const effectiveRawError = debugFailure?.rawError || rawError;
             const effectiveSanitizedError = debugFailure?.sanitizedError || sanitizedError;
+            const errorCode = classifyManagedToolErrorCode(effectiveRawError);
+            const pptCompletionRequired = errorCode === 'ppt_workflow_render_completed_complete_task_required';
+            const pptRendererPathBlocked = errorCode === 'render_pptx_from_instructions_blocked_after_html_deck_source';
             const failedTransitionReason: AltusRunTransitionReason = effectiveRawError.startsWith(DEPLOYMENT_COMPLETION_BLOCKED_PREFIX)
               ? 'deployment_completion_blocked'
-              : debugFailure?.userActionRequired
+              : debugFailure?.userActionRequired || pptRendererPathBlocked
                 ? 'tool_failed_user_action_required'
                 : 'tool_failed_but_recoverable';
             return {
               transitionReason: failedTransitionReason,
-              recoveryMode: debugFailure?.userActionRequired ? 'awaiting_user' : 'tool_repair',
-              errorCode: debugFailure?.errorCode,
-              retryable: debugFailure ? !debugFailure.userActionRequired : undefined,
+              recoveryMode: debugFailure?.userActionRequired || pptRendererPathBlocked ? 'awaiting_user' : 'tool_repair',
+              errorCode: debugFailure?.errorCode || (pptCompletionRequired || pptRendererPathBlocked ? errorCode : undefined),
+              retryable: debugFailure ? !debugFailure.userActionRequired : pptRendererPathBlocked ? false : undefined,
               sanitizedError: effectiveSanitizedError,
               rawError: effectiveRawError,
               eventPayload: this.isDeploymentTool(toolName)
@@ -3140,6 +3151,7 @@ private async chargeForModelCall(state: AltusRunState, input: {
               question: result.question,
               options: result.options,
               clarificationType: result.clarificationType,
+              structuredClarification: result.structuredClarification,
               toolCallId: toolCall.id,
             });
         }
@@ -3626,6 +3638,7 @@ private async chargeForModelCall(state: AltusRunState, input: {
       if (preExecutionClarificationQuestion) {
         const preExecutionClarificationOptions = this.resolvePreExecutionClarificationOptions(state);
         const preExecutionClarificationType = this.resolvePreExecutionClarificationType(state);
+        const preExecutionStructuredClarification = this.resolvePreExecutionStructuredClarification(state);
         state.markWaitingUser();
         await this.syncLoopSnapshot(state, {
           lastTransitionReason: 'clarification_requested',
@@ -3638,6 +3651,7 @@ private async chargeForModelCall(state: AltusRunState, input: {
           question: preExecutionClarificationQuestion,
           options: preExecutionClarificationOptions,
           clarificationType: preExecutionClarificationType,
+          structuredClarification: preExecutionStructuredClarification,
         });
         await this.lifecycleService.markWaitingUser(state);
         return;

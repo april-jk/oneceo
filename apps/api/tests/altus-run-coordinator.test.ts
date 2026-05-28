@@ -3238,6 +3238,111 @@ test('execute requests clarification and transitions to waiting_user', async () 
   assert.equal(eventCalls[3]?.payload.messageKey, 'managed:run-coordinator-clarify:clarification');
 });
 
+test('execute persists pre-execution structured clarification cards without model roundtrip', async () => {
+  const state = createState(
+    'run-coordinator-structured-clarify',
+    'session-coordinator-structured-clarify',
+    '帮我分析一下沐曦股份，做个 ppt'
+  );
+  const structuredClarification = {
+    kind: 'structured_clarification' as const,
+    taskType: 'ppt' as const,
+    title: '沐曦股份 PPT 制作前确认关键决策',
+    summary: '先确认与当前 PPT 直接相关的关键决策。',
+    maxCards: 4 as const,
+    briefFields: ['purpose_audience'],
+    cards: [
+      {
+        id: 'purpose_audience',
+        title: '演示目的与受众',
+        question: '沐曦股份 PPT 主要给谁看？',
+        why: '决定叙事角度和信息密度',
+        selectionMode: 'single' as const,
+        required: true,
+        allowOther: true,
+        allowNote: false,
+        options: [
+          {
+            id: 'investor_pitch',
+            label: '投资人融资路演',
+            description: '强调投资价值',
+            impact: '突出市场和融资用途。',
+            recommended: true,
+          },
+          {
+            id: 'executive_strategy',
+            label: '内部高管战略汇报',
+            description: '强调战略判断',
+            impact: '突出风险和资源投入。',
+          },
+          {
+            id: 'brand_business_intro',
+            label: '企业品牌与业务推介',
+            description: '强调业务亮点',
+            impact: '突出业务叙事。',
+          },
+        ],
+      },
+    ],
+  };
+  state.input.taskIntentProfile = {
+    ...state.input.taskIntentProfile,
+    needsClarification: true,
+    clarificationType: 'presentation_brief',
+    clarificationQuestion: '这份 PPT 开始制作前，先确认 4 个关键决策。',
+    structuredClarification,
+  };
+  const setupCalls: Record<string, unknown>[] = [];
+  const eventCalls: Array<{ eventType: string; payload: Record<string, unknown> }> = [];
+  const lifecycleCalls: string[] = [];
+
+  const setupService = {
+    persistTimelineMessage: mock.fn(async (input: Record<string, unknown>) => {
+      setupCalls.push({ type: 'timeline', input });
+    }),
+  };
+  const eventWriter = {
+    appendRunEvent: mock.fn(async (_runId: string, _sessionId: string, _userId: string, eventType: string, payload: Record<string, unknown>) => {
+      eventCalls.push({ eventType, payload });
+      return { sequence: eventCalls.length, payload };
+    }),
+  };
+  const lifecycleService = {
+    markWaitingUser: mock.fn(async () => lifecycleCalls.push('waiting_user')),
+  };
+  const setPendingClarificationMock = mock.method(
+    taskCreationFileMemoryStore,
+    'setPendingClarification',
+    async () => {}
+  );
+  const executeMock = mock.method(AltusManagedToolRuntime.prototype, 'execute', async () => {
+    throw new Error('model tool execution should not run for pre-execution structured clarification');
+  });
+  global.fetch = mock.fn(async () => {
+    throw new Error('model fetch should not run for pre-execution structured clarification');
+  }) as typeof fetch;
+
+  const coordinator = new AltusRunCoordinator(
+    setupService as any,
+    eventWriter as any,
+    lifecycleService as any
+  );
+
+  await coordinator.execute(state, new AbortController());
+
+  assert.equal(executeMock.mock.callCount(), 0);
+  assert.equal((global.fetch as any).mock.callCount(), 0);
+  assert.equal(setPendingClarificationMock.mock.callCount(), 1);
+  assert.deepEqual(lifecycleCalls, ['waiting_user']);
+  assert.equal(state.status, 'waiting_user');
+
+  const timelineCall = setupCalls.find((entry) => entry.type === 'timeline') as any;
+  assert.equal(timelineCall.input.messageType, 'clarification_request');
+  assert.equal(timelineCall.input.metadata.structuredClarification, structuredClarification);
+  assert.equal(eventCalls[0]?.eventType, 'clarification_requested');
+  assert.equal(eventCalls[0]?.payload.structuredClarification, structuredClarification);
+});
+
 test('execute stops the turn when google workspace confirmation is required', async () => {
   const state = createState('run-coordinator-google-confirmation', 'session-coordinator-google-confirmation');
   const eventCalls: Array<{ eventType: string; payload: Record<string, unknown> }> = [];
@@ -5591,4 +5696,187 @@ test('execute keeps repeated debug_open_page failures recoverable so Altus can i
     .filter((entry) => entry.eventType === 'tool_call_completed')
     .map((entry) => entry.payload.toolName);
   assert.deepEqual(completedToolNames, ['shell_execute', 'debug_open_page', 'complete_task']);
+});
+
+test('execute recovers from post-render ppt completion guard and still completes delivery', async () => {
+  const state = createState(
+    'run-ppt-post-render-guard',
+    'session-ppt-post-render-guard',
+    '请生成沐曦股份的 PPT'
+  );
+  const eventCalls: Array<{ eventType: string; payload: any }> = [];
+  const lifecycleCalls: string[] = [];
+  const lifecycleFailures: any[] = [];
+  let fetchCount = 0;
+
+  const setupService = {
+    ensurePreparedRunEnvironment: mock.fn(async () => ({
+      runtimeSnapshot: {
+        tier: 'pro',
+        model: 'altus-model',
+        apiType: 'openai',
+        baseUrl: 'https://example.test/v1',
+        tokenState: 'configured',
+        baseUrlHost: 'example.test',
+        billingTargetKey: 'agent.pro',
+        billingTargetType: 'agent_tier',
+        runtimeSnapshotVersion: 'agent-runtime-v1',
+      },
+      provider: {
+        model: 'altus-model',
+        apiType: 'openai',
+        baseUrl: 'https://example.test/v1',
+        apiKey: 'test-key',
+      },
+      sandbox: {
+        sandboxId: 'sandbox-ppt-post-render',
+        workspaceRoot: '/workspace/session-ppt-post-render',
+        reused: false,
+      },
+      managedContext: {
+        connectors: [],
+        mcpProviders: [],
+        skillCatalog: [],
+        skills: [
+          {
+            sourceType: 'platform',
+            skillId: 'skill-ppt-workflow',
+            revisionId: 'rev-ppt-workflow',
+            slug: 'ppt-workflow',
+            name: 'PPT 工作流',
+            description: 'PPT 子任务编排',
+            category: 'office',
+            renderedMarkdown: '# Skill Brief',
+            revisionNumber: 1,
+            resourceSummary: null,
+          },
+        ],
+        taskIntentProfile: {
+          shouldUseTodoWorkflow: true,
+        },
+      },
+    })),
+  };
+
+  const eventWriter = {
+    appendRunEvent: mock.fn(async (_runId: string, eventType: string, payload: any) => {
+      eventCalls.push({ eventType, payload });
+    }),
+  };
+
+  const lifecycleService = {
+    markRunning: mock.fn(async () => {
+      lifecycleCalls.push('running');
+    }),
+    markWaitingUser: mock.fn(async () => {
+      lifecycleCalls.push('waiting_user');
+    }),
+    markCompleted: mock.fn(async () => {
+      lifecycleCalls.push('completed');
+    }),
+    markFailed: mock.fn(async (_runId: string, payload: any) => {
+      lifecycleCalls.push('failed');
+      lifecycleFailures.push(payload);
+    }),
+    markStopped: mock.fn(async () => {
+      lifecycleCalls.push('stopped');
+    }),
+  };
+
+  global.fetch = mock.fn(async () => {
+    fetchCount += 1;
+    if (fetchCount === 1) {
+      return new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: '渲染已经成功，我先更新 todo 再收尾。',
+                tool_calls: [
+                  {
+                    id: 'tool-post-render-todo',
+                    type: 'function',
+                    function: {
+                      name: 'todowrite',
+                      arguments: JSON.stringify({
+                        todos: [
+                          { content: '1. 渲染 PPT', status: 'completed', activeForm: '已完成' },
+                          { content: '2. 完成交付', status: 'in_progress', activeForm: '完成交付' },
+                        ],
+                      }),
+                    },
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+    return new Response(
+      JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: '',
+              tool_calls: [
+                {
+                  id: 'tool-complete-after-render-guard',
+                  type: 'function',
+                  function: {
+                    name: 'complete_task',
+                    arguments: JSON.stringify({
+                      summary: 'PPT 已生成并完成交付。',
+                      verification: ['render_pptx_from_html_deck 已成功生成最终 PPTX'],
+                      attachments: [{ path: 'ppt-html-deck/export/沐曦股份深度战略分析.pptx' }],
+                    }),
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    );
+  }) as typeof fetch;
+
+  let executeCount = 0;
+  mock.method(AltusManagedToolRuntime.prototype, 'execute', async (toolName: string) => {
+    executeCount += 1;
+    if (toolName === 'todowrite') {
+      throw new Error(
+        'ppt_workflow_render_completed_complete_task_required:ppt-html-deck/export/沐曦股份深度战略分析.pptx'
+      );
+    }
+    if (toolName === 'complete_task') {
+      return {
+        type: 'complete' as const,
+        summary: 'PPT 已生成并完成交付。',
+        verification: ['render_pptx_from_html_deck 已成功生成最终 PPTX'],
+        attachments: [{ path: 'ppt-html-deck/export/沐曦股份深度战略分析.pptx' }],
+      };
+    }
+    throw new Error(`unexpected tool: ${toolName}`);
+  });
+
+  const coordinator = new AltusRunCoordinator(
+    setupService as any,
+    eventWriter as any,
+    lifecycleService as any,
+  );
+
+  await coordinator.execute(state, new AbortController());
+
+  assert.equal(executeCount, 2);
+  assert.equal(fetchCount, 2);
+  assert.equal(state.status, 'completed');
+  assert.equal(lifecycleFailures.length, 0);
+  const failedEvent = eventCalls.find((entry) => entry.eventType === 'tool_call_failed' && entry.payload.toolName === 'todowrite');
+  assert.equal((failedEvent?.payload as any)?.transitionReason, 'tool_failed_but_recoverable');
+  const completedToolNames = eventCalls
+    .filter((entry) => entry.eventType === 'tool_call_completed')
+    .map((entry) => entry.payload.toolName);
+  assert.deepEqual(completedToolNames, ['complete_task']);
 });

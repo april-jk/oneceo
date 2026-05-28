@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import { after, test } from 'node:test';
 import express from 'express';
-import connectorRoutes from '../src/routes/connector-routes';
+import connectorRoutes, {
+  CONNECTOR_CALLBACK_PATHS,
+  buildConnectorFrontendCallbackRedirectUrl,
+} from '../src/routes/connector-routes';
 import { mockAuthContextMiddleware } from './helpers/mock-auth-context';
 import { userConnectorService } from '../src/services/user-connector-service';
 
@@ -33,6 +36,17 @@ async function startServer(): Promise<TestServer> {
   const app = express();
   app.use(express.json());
   app.use(mockAuthContextMiddleware());
+  app.get(CONNECTOR_CALLBACK_PATHS, (req, res) => {
+    const redirectUrl = buildConnectorFrontendCallbackRedirectUrl(
+      req.originalUrl || req.url,
+      process.env.FRONTEND_URL || 'http://localhost:3000'
+    );
+    if (!redirectUrl) {
+      res.status(404).json({ success: false });
+      return;
+    }
+    res.redirect(302, redirectUrl);
+  });
   app.use('/api/connectors', connectorRoutes);
 
   const server = await new Promise<import('node:http').Server>((resolve) => {
@@ -70,6 +84,67 @@ test('GET /api/connectors/me rejects anonymous access', async () => {
   }
 });
 
+test('connector callback redirect preserves callback path and query for frontend SPA', () => {
+  const redirectUrl = buildConnectorFrontendCallbackRedirectUrl(
+    '/github/callback?settings=open&connector=github&state=state-1&status=success',
+    'http://localhost:3000'
+  );
+
+  assert.equal(
+    redirectUrl,
+    'http://localhost:3000/github/callback?settings=open&connector=github&state=state-1&status=success'
+  );
+});
+
+test('GET /github/callback on api redirects to frontend callback route', async () => {
+  const originalFrontendUrl = process.env.FRONTEND_URL;
+  process.env.FRONTEND_URL = 'http://localhost:3000';
+  const server = await startServer();
+
+  try {
+    const response = await fetch(
+      `${server.origin}/github/callback?settings=open&connector=github&state=state-1&status=success`,
+      {
+        redirect: 'manual',
+      }
+    );
+
+    assert.equal(response.status, 302);
+    assert.equal(
+      response.headers.get('location'),
+      'http://localhost:3000/github/callback?settings=open&connector=github&state=state-1&status=success'
+    );
+  } finally {
+    if (originalFrontendUrl === undefined) {
+      delete process.env.FRONTEND_URL;
+    } else {
+      process.env.FRONTEND_URL = originalFrontendUrl;
+    }
+    await server.close();
+  }
+});
+
+test('GET /api/connectors/catalog disables HTTP caching for settings directory data', async () => {
+  const server = await startServer();
+
+  try {
+    const response = await fetch(`${server.origin}/api/connectors/catalog`, {
+      headers: {
+        'if-none-match': '"stale-connector-catalog"',
+      },
+    });
+    const payload = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(payload.success, true);
+    assert.equal(response.headers.get('cache-control'), 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    assert.ok(Array.isArray(payload.data));
+    assert.ok(payload.data.some((item: { key?: string }) => item.key === 'github'));
+  } finally {
+    await server.close();
+  }
+});
+
 test('GET /api/connectors/me returns user-scoped catalog and profiles', async () => {
   const server = await startServer();
   connectorServiceAny.getMeSnapshot = async (userId: string) => {
@@ -91,6 +166,7 @@ test('GET /api/connectors/me returns user-scoped catalog and profiles', async ()
 
     assert.equal(response.status, 200);
     assert.equal(payload.success, true);
+    assert.equal(response.headers.get('cache-control'), 'no-store, no-cache, must-revalidate, proxy-revalidate');
     assert.equal(payload.data.userId, 'connector-user-1');
     assert.equal(payload.data.profiles.length, 1);
   } finally {

@@ -131,10 +131,17 @@ export class AltusManagedToolExecutor {
           args: eventArgs,
           content: result.question,
           contentForUser: result.question,
+          result: result.structuredClarification
+            ? { structuredClarification: result.structuredClarification }
+            : undefined,
           activatedSkills: result.activatedSkills as any,
         });
         traceToolCallComplete(toolTrace, {
-          responseBody: { type: 'ask_user', question: result.question },
+          responseBody: {
+            type: 'ask_user',
+            question: result.question,
+            structuredClarification: result.structuredClarification,
+          },
           completedAt: new Date(),
           durationMs: Date.now() - toolStartedAt.getTime(),
         });
@@ -180,6 +187,9 @@ export class AltusManagedToolExecutor {
       }
 
       const disposition = input.onResult?.(result) || {};
+      const contentForModel = result.terminalInstruction
+        ? `${result.content}\n\n${result.terminalInstruction}`
+        : result.content;
       const toolResultEnvelope = buildManagedToolResultEnvelope({
         status: 'ok',
         runId: this.input.runId,
@@ -187,7 +197,7 @@ export class AltusManagedToolExecutor {
         toolName,
         modelRoundId: input.modelRoundId,
         args: eventArgs,
-        content: result.content,
+        content: contentForModel,
         contentForUser: this.input.buildToolEventContent(toolName, 'completed'),
         activatedSkills: result.activatedSkills as any,
         result: result.content,

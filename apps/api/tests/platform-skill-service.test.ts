@@ -53,8 +53,8 @@ test('platform seeds include ppt workflow as auto-attached office skill with con
   assert.equal(seed.name, 'PPT 工作流');
   assert.equal(seed.category, 'office');
   assert.match(seed.description, /子任务编排/);
-  assert.match(seed.bodyMarkdown, /PptRenderInstructionDraft/);
-  assert.match(seed.bodyMarkdown, /render_pptx_from_instructions/);
+  assert.match(seed.bodyMarkdown, /HtmlDeckSpec/);
+  assert.match(seed.bodyMarkdown, /render_pptx_from_html_deck/);
   assert.match(seed.bodyMarkdown, /ppt_intent_analyzer/);
   assert.match(seed.bodyMarkdown, /aesthetic-style-guide/);
 
@@ -79,6 +79,7 @@ test('platform seeds include ppt workflow as auto-attached office skill with con
     'references/preflight-checklist.md',
     'references/subtask-contracts.md',
     'references/visual-plan-guide.md',
+    'templates/html-deck-spec.md',
     'templates/render-instruction-draft.md',
   ]);
 });

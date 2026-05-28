@@ -8,6 +8,7 @@ import {
   __hasTurnIceServerForTest,
   __parseIceServersForTest,
   __probeChromiumCdpForTest,
+  __resolveNekoBaseUrlForTest,
   __renderNekoMemberYamlForTest,
   detectIceFailureFromLog,
   ensureNekoDebug,
@@ -76,6 +77,20 @@ test('ice failure detector ignores historical failed after recovered connected',
     '10:51AM INF ICE connection state changed: connected',
   ].join('\n');
   assert.equal(detectIceFailureFromLog(log), false);
+});
+
+test('neko debug host resolution reuses previous url on transient E2B control-plane errors', async () => {
+  mock.method(e2bConnector, 'getSandboxHost', async () => {
+    throw new TypeError('fetch failed');
+  });
+
+  const baseUrl = await __resolveNekoBaseUrlForTest(
+    'sandbox-debug-host-transient',
+    8081,
+    'https://8081-old-sandbox.e2b.app'
+  );
+
+  assert.equal(baseUrl, 'https://8081-old-sandbox.e2b.app');
 });
 
 test('neko debug uses anonymous access without url credentials', () => {

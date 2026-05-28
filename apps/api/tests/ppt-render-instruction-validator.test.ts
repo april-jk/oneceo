@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { validatePptRenderInstruction } from '../src/services/ppt-render-instruction-validator';
+import { sanitizePptFileName, validatePptRenderInstruction } from '../src/services/ppt-render-instruction-validator';
 
 const validInstruction = {
   deck: {
@@ -119,4 +119,8 @@ test('validatePptRenderInstruction rejects slide count mismatch', () => {
       }),
     /slideCount must match/
   );
+});
+
+test('sanitizePptFileName preserves unicode names for delivered ppt files', () => {
+  assert.equal(sanitizePptFileName('沐曦股份-投资价值分析.pptx'), '沐曦股份-投资价值分析.pptx');
 });

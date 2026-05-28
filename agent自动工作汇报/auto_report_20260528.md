@@ -12,5 +12,6 @@
 - 修复前端完成卡片路由：`ppt-html-deck/` 下除 `export/*.pptx` 外都按 PPT 中间产物隐藏；同一 run 有 PPTX 正式附件时优先展示下载卡片，不再把 slide HTML 列成“任务完成 N 个文件”。
 - 收紧 `complete_task`：PPT 工作流中附带 HTML Deck 源文件、截图或 report 会被拒绝，防止中间文件进入最终交付。
 - 调整配色策略：不再在 HTML Deck 导出后做文本对比度阻断，而是在补全信息后先生成 `colorApplicationPlan`，导出成功后直接交付；如用户反馈可读性问题，再按反馈重导。
+- 修复 Unicode 文件名交付：`sanitizePptFileName` 现在保留中文 PPT 文件名，避免 renderer 成功后因默认回退到 `oneceo-presentation.pptx` 而诱发额外 `cp`/重命名步骤并被 post-render 护栏拦下。
 - 为旧 instruction renderer 增加主题色可读性选择，避免模型给出低对比配色时直接生成看不清文字的 PPT。
 - 已通过 API PPT/runtime 局部回归 82 项，Web 完成卡片相关回归 27 项。

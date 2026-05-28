@@ -107,7 +107,7 @@ export type PptRenderInstructionValidationResult = {
 export function sanitizePptFileName(value: unknown, fallback = 'oneceo-presentation.pptx') {
   const raw = asText(value) || fallback;
   const withoutPath = raw.split('/').pop()?.split('\\').pop() || fallback;
-  const sanitized = withoutPath.replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/-+/g, '-').replace(/^-+|-+$/g, '');
+  const sanitized = withoutPath.replace(/[^\p{L}\p{N}._-]+/gu, '-').replace(/-+/g, '-').replace(/^-+|-+$/g, '');
   const base = sanitized.toLowerCase().endsWith('.pptx') ? sanitized.slice(0, -5) : sanitized;
   return `${(base || 'oneceo-presentation').slice(0, 123)}.pptx`;
 }

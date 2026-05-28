@@ -90,3 +90,15 @@ test('validateHtmlDeckSpec rejects unsafe slide html paths', () => {
     /htmlFile must be a safe relative path/
   );
 });
+
+test('validateHtmlDeckSpec keeps unicode output filenames', () => {
+  const result = validateHtmlDeckSpec({
+    ...validSpec,
+    deck: {
+      ...validSpec.deck,
+      outputFileName: '沐曦股份-投资价值分析.pptx',
+    },
+  });
+
+  assert.equal(result.fileName, '沐曦股份-投资价值分析.pptx');
+});

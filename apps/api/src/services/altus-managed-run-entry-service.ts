@@ -33,6 +33,7 @@ import {
 } from './managed-mcp-tool-confirmation';
 import { normalizeAgentModelTier, resolveAgentRuntimeProfile, toAgentRuntimeSnapshot } from './agent-runtime-profile-service';
 import { mcpToolConfirmationService } from './mcp-tool-confirmation-service';
+import { membershipService } from './membership-service';
 
 export class AltusManagedRunEntryService {
   private readonly controllers = new Map<string, AbortController>();
@@ -131,8 +132,10 @@ export class AltusManagedRunEntryService {
     if (orchestratorSessionId) {
       void sessionMcpRecoveryService.ensureSessionRecovered(sessionId, orchestratorSessionId).catch(() => null);
     }
+    const requestedTier = this.resolveModelTier(input.metadata);
+    await membershipService.assertUserCanUseAgentLevel(userId, requestedTier);
     const runtimeProfile = resolveAgentRuntimeProfile({
-      tier: this.resolveModelTier(input.metadata),
+      tier: requestedTier,
       needsVision: this.metadataHasImageInput(input.metadata),
     });
     const runtimeSnapshot = toAgentRuntimeSnapshot(runtimeProfile);

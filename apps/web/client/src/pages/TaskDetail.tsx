@@ -68,7 +68,7 @@ export default function TaskDetail() {
   const [ceoMessage, setCeoMessage] = useState("");
   const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
   const [selectedDeliverable, setSelectedDeliverable] = useState<any>(null);
-  const [selectedModel, setSelectedModel] = useState<"lite" | "pro" | "max">("pro");
+  const [selectedModel, setSelectedModel] = useState<"lite" | "pro" | "max">("lite");
 
   // Mock data - 模拟经理-员工对话数据
   const taskInfo = {

@@ -22,7 +22,7 @@ const TIERS: AgentModelTier[] = ['lite', 'pro', 'max'];
 
 export function normalizeAgentModelTier(value: unknown): AgentModelTier {
   const text = asText(value).toLowerCase();
-  return (TIERS as string[]).includes(text) ? (text as AgentModelTier) : 'pro';
+  return (TIERS as string[]).includes(text) ? (text as AgentModelTier) : 'lite';
 }
 
 function env(name: string) {

@@ -81,7 +81,7 @@ export default function HomePage() {
   const { status } = useAuth();
   const [message, setMessage] = useState("");
   const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
-  const [selectedModel, setSelectedModel] = useState<"lite" | "pro" | "max">("pro");
+  const [selectedModel, setSelectedModel] = useState<"lite" | "pro" | "max">("lite");
   const quickActionRows = t("homePage.quickActions", { returnObjects: true }) as string[][];
 
   useEffect(() => {

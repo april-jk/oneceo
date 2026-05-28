@@ -28,6 +28,7 @@ import { deriveManagedTaskIntentProfile } from '../../services/altus-managed-pro
 import { readManagedSkillCatalog, readManagedSkillContext } from '../../services/altus-managed-shared';
 import { readSessionSkillState } from '../../services/task-session-skill-state-service';
 import { normalizeAgentModelTier, resolveAgentRuntimeProfile, toAgentRuntimeSnapshot } from '../../services/agent-runtime-profile-service';
+import { membershipService } from '../../services/membership-service';
 
 function asText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
@@ -670,8 +671,10 @@ export class TaskCreationService {
         const mcpToolSnapshot = await altusManagedSetupService.captureMcpToolSnapshot(this.sessionId);
         const sessionMemory = await taskCreationFileMemoryStore.getSession(this.sessionId);
         const executionShape = this.resolveExecutionShape(payload);
+        const requestedTier = this.resolveModelTier(payload.metadata);
+        await membershipService.assertUserCanUseAgentLevel(payload.userId, requestedTier);
         const runtimeProfile = resolveAgentRuntimeProfile({
-          tier: this.resolveModelTier(payload.metadata),
+          tier: requestedTier,
           needsVision: this.metadataHasImageInput(payload.metadata),
         });
         const runtimeSnapshot = toAgentRuntimeSnapshot(runtimeProfile);

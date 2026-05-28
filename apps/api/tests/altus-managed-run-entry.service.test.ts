@@ -4,6 +4,7 @@ import { taskCreationFileMemoryStore } from '../src/agents/task-creation/file-me
 import { taskSessionRunDAO } from '../src/db/dao';
 import { altusMemoryContextService } from '../src/services/altus-memory-context-service';
 import { AltusManagedRunEntryService } from '../src/services/altus-managed-run-entry-service';
+import { membershipService } from '../src/services/membership-service';
 import { mcpToolConfirmationService } from '../src/services/mcp-tool-confirmation-service';
 import { taskSessionAltusMemoryService } from '../src/services/task-session-altus-memory-service';
 import { taskSessionSkillStateService } from '../src/services/task-session-skill-state-service';
@@ -12,6 +13,22 @@ import { userSkillService } from '../src/services/user-skill-service';
 afterEach(() => {
   mock.reset();
 });
+
+function allowMembershipAgentLevels(levels: string[] = ['lite', 'pro', 'max']) {
+  return mock.method(membershipService, 'assertUserCanUseAgentLevel', async (_userId: string, level: string) => {
+    if (!levels.includes(level)) {
+      throw new Error(`当前会员类型仅允许使用 ${levels.map((item) => `agent ${item}`).join('、')}`);
+    }
+    return {
+      level,
+      entitlement: {
+        membership: { id: 'membership-test' },
+        plan: { id: 'plan-test' },
+        allowedAgentLevels: levels,
+      },
+    } as any;
+  });
+}
 
 test('startRun persists timeline, creates run, and dispatches coordinator execution', async () => {
   const run = {
@@ -67,6 +84,14 @@ test('startRun persists timeline, creates run, and dispatches coordinator execut
   }));
   mock.method(taskSessionRunDAO, 'findActiveRun', async () => null);
   mock.method(taskSessionRunDAO, 'getLatestRun', async () => null);
+  const entitlementMock = mock.method(membershipService, 'assertUserCanUseAgentLevel', async () => ({
+    level: 'lite',
+    entitlement: {
+      membership: { id: 'membership-1' },
+      plan: { id: 'plan-1' },
+      allowedAgentLevels: ['lite'],
+    },
+  }) as any);
   mock.method(userSkillService, 'listAvailableSkills', async () => [
     {
       sourceType: 'platform',
@@ -311,6 +336,8 @@ test('startRun persists timeline, creates run, and dispatches coordinator execut
   });
 
   assert.equal(summary?.id, 'run-1');
+  assert.equal(entitlementMock.mock.callCount(), 1);
+  assert.deepEqual(entitlementMock.mock.calls[0]?.arguments, ['user-1', 'lite']);
   assert.equal(createRunMock.mock.callCount(), 1);
   assert.equal((createRunMock.mock.calls[0]?.arguments[0] as any).connectorSnapshotId, 'snapshot-1');
   assert.equal((createRunMock.mock.calls[0]?.arguments[0] as any).mcpToolSnapshotId, 'mcp-snapshot-1');
@@ -355,6 +382,46 @@ test('startRun persists timeline, creates run, and dispatches coordinator execut
   assert.ok(capturedAbortController instanceof AbortController);
 });
 
+test('startRun rejects agent tiers outside current membership entitlement', async () => {
+  mock.method(taskCreationFileMemoryStore, 'getSession', async () => ({
+    id: 'session-lite-only',
+    title: 'Lite only task',
+    pendingQuestion: null,
+  }) as any);
+  mock.method(taskSessionRunDAO, 'findActiveRun', async () => null);
+  const entitlementMock = allowMembershipAgentLevels(['lite']);
+  const setupService = {
+    ensureSessionOwnership: mock.fn(async () => {}),
+  };
+  const askUserPairingService = {
+    resolvePending: mock.fn(async () => null),
+  };
+  const service = new AltusManagedRunEntryService(
+    setupService as any,
+    {} as any,
+    {} as any,
+    {} as any,
+    {} as any,
+    {
+      reconcileLatestRun: mock.fn(async () => null),
+    } as any,
+    askUserPairingService as any
+  );
+
+  await assert.rejects(
+    () => service.startRun('session-lite-only', 'user-lite-only', {
+      content: '帮我继续处理',
+      metadata: {
+        modelTier: 'pro',
+      },
+    }),
+    /当前会员类型仅允许使用 agent lite/
+  );
+
+  assert.equal(entitlementMock.mock.callCount(), 1);
+  assert.deepEqual(entitlementMock.mock.calls[0]?.arguments, ['user-lite-only', 'pro']);
+});
+
 test('startRun does not pre-mark session executing when the first turn must clarify', async () => {
   const run = {
     id: 'run-clarify-1',
@@ -393,6 +460,14 @@ test('startRun does not pre-mark session executing when the first turn must clar
   mock.method(taskSessionRunDAO, 'findActiveRun', async () => null);
   mock.method(taskSessionRunDAO, 'getLatestRun', async () => null);
   mock.method(taskSessionRunDAO, 'createRun', async () => run as any);
+  mock.method(membershipService, 'assertUserCanUseAgentLevel', async () => ({
+    level: 'pro',
+    entitlement: {
+      membership: { id: 'membership-clarify-1' },
+      plan: { id: 'plan-clarify-1' },
+      allowedAgentLevels: ['pro'],
+    },
+  }) as any);
   mock.method(userSkillService, 'listAvailableSkills', async () => [] as any);
   mock.method(taskSessionSkillStateService, 'prepareRunState', async () => ({
     skillCatalog: [],
@@ -545,6 +620,7 @@ test('startRun keeps user_response out of executing lifecycle when clarification
     updatedAt: '2026-04-21T16:00:00.000Z',
   }));
   mock.method(taskSessionRunDAO, 'findActiveRun', async () => null);
+  allowMembershipAgentLevels();
   mock.method(taskSessionRunDAO, 'getLatestRun', async () => null);
   mock.method(taskSessionRunDAO, 'createRun', async () => run as any);
   mock.method(userSkillService, 'listAvailableSkills', async () => [] as any);
@@ -711,6 +787,7 @@ test('startRun closes pending ask_user pairing before continuing from clarificat
     updatedAt: '2026-04-21T16:00:00.000Z',
   }));
   mock.method(taskSessionRunDAO, 'findActiveRun', async () => null);
+  allowMembershipAgentLevels();
   mock.method(taskSessionRunDAO, 'getLatestRun', async () => null);
   mock.method(taskSessionRunDAO, 'createRun', async () => run as any);
   mock.method(userSkillService, 'listAvailableSkills', async () => [] as any);
@@ -849,6 +926,7 @@ test('stopRun aborts active controller for in-flight run', async () => {
     pendingQuestion: null,
   }) as any);
   mock.method(taskSessionRunDAO, 'findActiveRun', async () => null);
+  allowMembershipAgentLevels();
   mock.method(taskSessionRunDAO, 'getLatestRun', async () => null);
   mock.method(userSkillService, 'listAvailableSkills', async () => [] as any);
   mock.method(altusMemoryContextService, 'buildPromptSectionForRun', async () => ({
@@ -1083,6 +1161,7 @@ test('startRun accepts metadata-only mcp confirmation response', async () => {
     sessionMemory: null,
   }));
   mock.method(taskSessionRunDAO, 'findActiveRun', async () => null);
+  allowMembershipAgentLevels();
   mock.method(taskSessionRunDAO, 'getLatestRun', async () => null);
   mock.method(taskSessionRunDAO, 'createRun', async () => run as any);
   mock.method(mcpToolConfirmationService, 'resolveApprovedReplay', async () => ({
@@ -1230,6 +1309,7 @@ test('startRun converts approved mcp confirmation into hidden replay state inste
     pendingQuestion: null,
   }) as any);
   mock.method(taskSessionRunDAO, 'findActiveRun', async () => null);
+  allowMembershipAgentLevels();
   mock.method(taskSessionRunDAO, 'getLatestRun', async () => null);
   mock.method(userSkillService, 'listAvailableSkills', async () => []);
   mock.method(taskSessionSkillStateService, 'prepareRunState', async () => ({

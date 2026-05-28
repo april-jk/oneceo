@@ -35,7 +35,7 @@ describe("buildManagedTaskInputMetadata", () => {
       }),
     ).toEqual({
       skills: [skill],
-      modelTier: "pro",
+      modelTier: "lite",
       originalInput: "run with selected skill",
     });
   });
@@ -50,7 +50,7 @@ describe("buildManagedTaskInputMetadata", () => {
       }),
     ).toEqual({
       mcpReferences: [mcpReference],
-      modelTier: "pro",
+      modelTier: "lite",
       originalInput: "use github",
     });
   });
@@ -64,7 +64,7 @@ describe("buildManagedTaskInputMetadata", () => {
         fileCount: 0,
       }),
     ).toEqual({
-      modelTier: "pro",
+      modelTier: "lite",
       originalInput: "plain text only",
     });
   });

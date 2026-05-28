@@ -2511,7 +2511,7 @@ export default function Home() {
           sessionId: activeSessionId || undefined,
           metadata: buildManagedTaskInputMetadata({
             originalInput: displayText,
-            modelTier: selectedModel || "pro",
+            modelTier: selectedModel || "lite",
             skills: mergedSkills,
             mcpReferences: selectedMcp,
             fileCount: uploadableAttachments.length,
@@ -2707,7 +2707,7 @@ export default function Home() {
           sessionId: activeSessionId,
           metadata: buildManagedTaskInputMetadata({
             originalInput: displayText,
-            modelTier: selectedModel || "pro",
+            modelTier: selectedModel || "lite",
             skills: mergedSkills,
             mcpReferences: selectedMcp,
             fileCount: uploadableAttachments.length,

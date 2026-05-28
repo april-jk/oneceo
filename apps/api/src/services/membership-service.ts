@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, lte, sql } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, lte, sql } from 'drizzle-orm';
 import { db } from '../config/database';
 import {
   appUsers,
@@ -17,6 +17,36 @@ import {
 
 type DbTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
 export type MembershipDbExecutor = typeof db | DbTransaction;
+export type MembershipAgentLevel = 'lite' | 'pro' | 'max';
+
+const AGENT_LEVELS: MembershipAgentLevel[] = ['lite', 'pro', 'max'];
+const REGISTER_DEFAULT_SOURCE_TYPE = 'register_default';
+export const DEFAULT_MEMBERSHIP_PLAN_CODE = 'default';
+export const DEFAULT_MEMBERSHIP_PLAN_VALUES = {
+  code: DEFAULT_MEMBERSHIP_PLAN_CODE,
+  name: '默认会员',
+  status: 'active',
+  defaultCredits: 500,
+  isDefault: true,
+  allowedAgentLevelsJson: ['lite'],
+  benefitsJson: ['Agent lite'],
+  dailyAutoRestoreEnabled: true,
+  dailyAutoRestoreCredits: 100,
+  description: '系统默认会员类型：注册用户默认获得 500 积分，每日自动恢复 100 积分，仅开放 Agent Lite。',
+  sortOrder: 0,
+} satisfies Pick<NewMembershipPlan,
+  | 'code'
+  | 'name'
+  | 'status'
+  | 'defaultCredits'
+  | 'isDefault'
+  | 'allowedAgentLevelsJson'
+  | 'benefitsJson'
+  | 'dailyAutoRestoreEnabled'
+  | 'dailyAutoRestoreCredits'
+  | 'description'
+  | 'sortOrder'
+>;
 
 function generateMembershipCode(name: string) {
   const normalized = String(name || '')
@@ -30,6 +60,27 @@ function generateMembershipCode(name: string) {
 }
 
 export class MembershipService {
+  private normalizeAgentLevel(value: unknown): MembershipAgentLevel {
+    const normalized = String(value || '').trim().toLowerCase();
+    if (!AGENT_LEVELS.includes(normalized as MembershipAgentLevel)) {
+      throw new Error('Agent 等级无效');
+    }
+    return normalized as MembershipAgentLevel;
+  }
+
+  private normalizeAllowedAgentLevels(value: unknown): MembershipAgentLevel[] {
+    if (!Array.isArray(value)) return [];
+    const results: MembershipAgentLevel[] = [];
+    for (const item of value) {
+      const normalized = String(item || '').trim().toLowerCase();
+      if (!AGENT_LEVELS.includes(normalized as MembershipAgentLevel)) continue;
+      if (!results.includes(normalized as MembershipAgentLevel)) {
+        results.push(normalized as MembershipAgentLevel);
+      }
+    }
+    return results;
+  }
+
   private normalizePlanStatus(status: string) {
     const normalized = String(status || '').trim().toLowerCase();
     if (!['active', 'inactive'].includes(normalized)) {
@@ -184,6 +235,13 @@ export class MembershipService {
       const dailyAutoRestoreCredits = dailyAutoRestoreEnabled
         ? this.sanitizeNonNegativeInteger(input.dailyAutoRestoreCredits, '每日自动恢复积分')
         : 0;
+      const allowedAgentLevels = this.normalizeAllowedAgentLevels(input.allowedAgentLevelsJson);
+      if (input.isDefault && status !== 'active') {
+        throw new Error('默认会员类型必须保持启用');
+      }
+      if (input.isDefault && allowedAgentLevels.length === 0) {
+        throw new Error('默认会员类型至少需要开放一个 Agent 等级');
+      }
 
       if (input.isDefault) {
         await trx.update(membershipPlans).set({ isDefault: false, updatedAt: new Date() }).where(eq(membershipPlans.isDefault, true));
@@ -198,7 +256,7 @@ export class MembershipService {
         defaultCredits,
         dailyAutoRestoreEnabled,
         dailyAutoRestoreCredits,
-        allowedAgentLevelsJson: Array.isArray(input.allowedAgentLevelsJson) ? input.allowedAgentLevelsJson : [],
+        allowedAgentLevelsJson: allowedAgentLevels,
         benefitsJson: Array.isArray(input.benefitsJson) ? input.benefitsJson : [],
       }).returning();
       await trx.insert(membershipAuditLogs).values({
@@ -237,6 +295,25 @@ export class MembershipService {
         : this.sanitizeNonNegativeInteger(input.dailyAutoRestoreCredits, '每日自动恢复积分');
 
       const nextIsDefault = input.isDefault === undefined ? before.isDefault : Boolean(input.isDefault);
+      const nextAllowedAgentLevels = input.allowedAgentLevelsJson === undefined
+        ? this.normalizeAllowedAgentLevels(before.allowedAgentLevelsJson)
+        : this.normalizeAllowedAgentLevels(input.allowedAgentLevelsJson);
+      if (before.isDefault && !nextIsDefault) {
+        throw new Error('默认会员类型不能直接取消，请先将其他会员类型设为默认');
+      }
+      if (nextIsDefault && nextStatus !== 'active') {
+        throw new Error('默认会员类型必须保持启用');
+      }
+      if (nextIsDefault && nextAllowedAgentLevels.length === 0) {
+        throw new Error('默认会员类型至少需要开放一个 Agent 等级');
+      }
+
+      const previousDefaultPlans = nextIsDefault
+        ? await trx
+            .select({ id: membershipPlans.id })
+            .from(membershipPlans)
+            .where(and(eq(membershipPlans.isDefault, true), sql`${membershipPlans.id} <> ${planId}`))
+        : [];
       if (nextIsDefault) {
         await trx
           .update(membershipPlans)
@@ -251,9 +328,7 @@ export class MembershipService {
           status: nextStatus,
           defaultCredits: nextDefaultCredits,
           isDefault: nextIsDefault,
-          allowedAgentLevelsJson: input.allowedAgentLevelsJson === undefined
-            ? before.allowedAgentLevelsJson
-            : (Array.isArray(input.allowedAgentLevelsJson) ? input.allowedAgentLevelsJson : []),
+          allowedAgentLevelsJson: nextAllowedAgentLevels,
           benefitsJson: input.benefitsJson === undefined
             ? before.benefitsJson
             : (Array.isArray(input.benefitsJson) ? input.benefitsJson : []),
@@ -277,6 +352,16 @@ export class MembershipService {
         afterJson: after as any,
         reason: String(input.description || '').trim(),
       });
+
+      if (after.isDefault && previousDefaultPlans.length > 0) {
+        await this.syncDefaultMembershipAssignmentsWithExecutor(
+          trx,
+          after.id,
+          previousDefaultPlans.map((item) => item.id),
+          actorId || null,
+          '默认会员类型切换后同步注册默认用户'
+        );
+      }
 
       return after;
     });
@@ -452,12 +537,188 @@ export class MembershipService {
       {
         userId,
         membershipPlanId: defaultPlan.id,
-        sourceType: 'register_default',
+        sourceType: REGISTER_DEFAULT_SOURCE_TYPE,
         assignedReason: '用户注册自动绑定默认会员',
         grantCredits: defaultPlan.defaultCredits,
       },
       null
     );
+  }
+
+  private async syncDefaultMembershipAssignmentsWithExecutor(
+    executor: MembershipDbExecutor,
+    defaultPlanId: string,
+    previousDefaultPlanIds: string[],
+    actorId?: string | null,
+    reason = '同步默认会员用户'
+  ) {
+    const uniquePreviousIds = Array.from(new Set(previousDefaultPlanIds.filter((item) => item && item !== defaultPlanId)));
+    if (uniquePreviousIds.length === 0) {
+      return { updatedCount: 0 };
+    }
+
+    const rows = await executor
+      .update(userMemberships)
+      .set({
+        membershipPlanId: defaultPlanId,
+        updatedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(userMemberships.status, 'active'),
+          eq(userMemberships.sourceType, REGISTER_DEFAULT_SOURCE_TYPE),
+          inArray(userMemberships.membershipPlanId, uniquePreviousIds)
+        )
+      )
+      .returning();
+
+    if (rows.length > 0) {
+      await executor.insert(membershipAuditLogs).values({
+        actorId: actorId || null,
+        action: 'user_membership.default.sync',
+        targetType: 'membership_plan',
+        targetId: defaultPlanId,
+        beforeJson: {
+          previousDefaultPlanIds: uniquePreviousIds,
+        },
+        afterJson: {
+          defaultPlanId,
+          updatedMembershipIds: rows.map((item) => item.id),
+          updatedCount: rows.length,
+        },
+        reason,
+      } satisfies NewMembershipAuditLog);
+    }
+
+    return { updatedCount: rows.length };
+  }
+
+  async syncDefaultMembershipAssignments(defaultPlanId: string, previousDefaultPlanIds: string[], actorId?: string | null) {
+    return db.transaction(async (trx) =>
+      this.syncDefaultMembershipAssignmentsWithExecutor(trx, defaultPlanId, previousDefaultPlanIds, actorId || null)
+    );
+  }
+
+  async ensureSystemDefaultPlan() {
+    return db.transaction(async (trx) => {
+      const existingDefaultPlans = await trx
+        .select({ id: membershipPlans.id, code: membershipPlans.code })
+        .from(membershipPlans)
+        .where(eq(membershipPlans.isDefault, true));
+      const [beforeCanonical] = await trx
+        .select()
+        .from(membershipPlans)
+        .where(eq(membershipPlans.code, DEFAULT_MEMBERSHIP_PLAN_CODE))
+        .limit(1);
+      const shouldPromoteCanonical = !beforeCanonical || existingDefaultPlans.length === 0;
+      const previousDefaultPlanIds = shouldPromoteCanonical
+        ? existingDefaultPlans
+            .filter((item) => item.code !== DEFAULT_MEMBERSHIP_PLAN_CODE)
+            .map((item) => item.id)
+        : [];
+
+      if (shouldPromoteCanonical) {
+        await trx
+          .update(membershipPlans)
+          .set({ isDefault: false, updatedAt: new Date() })
+          .where(and(eq(membershipPlans.isDefault, true), sql`${membershipPlans.code} <> ${DEFAULT_MEMBERSHIP_PLAN_CODE}`));
+      }
+
+      const [plan] = await trx
+        .insert(membershipPlans)
+        .values({
+          ...DEFAULT_MEMBERSHIP_PLAN_VALUES,
+          updatedAt: new Date(),
+        })
+        .onConflictDoUpdate({
+          target: membershipPlans.code,
+          set: {
+            name: beforeCanonical?.name || DEFAULT_MEMBERSHIP_PLAN_VALUES.name,
+            status: shouldPromoteCanonical ? DEFAULT_MEMBERSHIP_PLAN_VALUES.status : beforeCanonical?.status || DEFAULT_MEMBERSHIP_PLAN_VALUES.status,
+            defaultCredits: beforeCanonical?.defaultCredits ?? DEFAULT_MEMBERSHIP_PLAN_VALUES.defaultCredits,
+            isDefault: shouldPromoteCanonical ? true : beforeCanonical?.isDefault ?? true,
+            allowedAgentLevelsJson: beforeCanonical?.allowedAgentLevelsJson ?? DEFAULT_MEMBERSHIP_PLAN_VALUES.allowedAgentLevelsJson,
+            benefitsJson: beforeCanonical?.benefitsJson ?? DEFAULT_MEMBERSHIP_PLAN_VALUES.benefitsJson,
+            dailyAutoRestoreEnabled: beforeCanonical?.dailyAutoRestoreEnabled ?? DEFAULT_MEMBERSHIP_PLAN_VALUES.dailyAutoRestoreEnabled,
+            dailyAutoRestoreCredits: beforeCanonical?.dailyAutoRestoreCredits ?? DEFAULT_MEMBERSHIP_PLAN_VALUES.dailyAutoRestoreCredits,
+            description: beforeCanonical?.description || DEFAULT_MEMBERSHIP_PLAN_VALUES.description,
+            sortOrder: beforeCanonical?.sortOrder ?? DEFAULT_MEMBERSHIP_PLAN_VALUES.sortOrder,
+            updatedAt: new Date(),
+          },
+        })
+        .returning();
+
+      if (!beforeCanonical || previousDefaultPlanIds.length > 0) {
+        await trx.insert(membershipAuditLogs).values({
+          actorId: null,
+          action: 'membership_plan.default.ensure',
+          targetType: 'membership_plan',
+          targetId: plan.id,
+          beforeJson: {
+            canonicalPlanExisted: Boolean(beforeCanonical),
+            previousDefaultPlanIds,
+          },
+          afterJson: plan as any,
+          reason: '系统启动确保默认会员类型存在',
+        } satisfies NewMembershipAuditLog);
+      }
+
+      const syncResult = await this.syncDefaultMembershipAssignmentsWithExecutor(
+        trx,
+        plan.id,
+        previousDefaultPlanIds,
+        null,
+        '系统默认会员初始化后同步注册默认用户'
+      );
+
+      return {
+        plan,
+        syncedDefaultMemberships: syncResult.updatedCount,
+      };
+    });
+  }
+
+  async getActiveMembershipEntitlement(userId: string) {
+    const [row] = await db
+      .select({
+        membership: userMemberships,
+        plan: membershipPlans,
+      })
+      .from(userMemberships)
+      .innerJoin(membershipPlans, eq(userMemberships.membershipPlanId, membershipPlans.id))
+      .where(
+        and(
+          eq(userMemberships.userId, userId),
+          eq(userMemberships.status, 'active'),
+          eq(membershipPlans.status, 'active')
+        )
+      )
+      .orderBy(desc(userMemberships.updatedAt))
+      .limit(1);
+    if (!row) return null;
+    return {
+      membership: row.membership,
+      plan: row.plan,
+      allowedAgentLevels: this.normalizeAllowedAgentLevels(row.plan.allowedAgentLevelsJson),
+    };
+  }
+
+  async assertUserCanUseAgentLevel(userId: string, agentLevel: unknown) {
+    const level = this.normalizeAgentLevel(agentLevel);
+    const entitlement = await this.getActiveMembershipEntitlement(userId);
+    if (!entitlement) {
+      throw new Error('当前用户没有启用中的会员类型，无法使用 Agent');
+    }
+    if (!entitlement.allowedAgentLevels.includes(level)) {
+      const allowed = entitlement.allowedAgentLevels.length > 0
+        ? entitlement.allowedAgentLevels.map((item) => `agent ${item}`).join('、')
+        : '无';
+      throw new Error(`当前会员类型仅允许使用 ${allowed}`);
+    }
+    return {
+      level,
+      entitlement,
+    };
   }
 
   async runDailyAutoRestore(targetDate = new Date()) {

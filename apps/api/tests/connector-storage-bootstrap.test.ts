@@ -9,13 +9,15 @@ afterEach(() => {
 test('ensureReady skips migration when latest schema is already ready', async () => {
   const inspectSchema = mock.fn(async () => ({ ready: true, missing: [] as string[] }));
   const runMigration = mock.fn(async () => true);
-  const bootstrap = new ConnectorStorageBootstrap({ inspectSchema, runMigration });
+  const ensureSystemDefaultMembershipPlan = mock.fn(async () => true);
+  const bootstrap = new ConnectorStorageBootstrap({ inspectSchema, runMigration, ensureSystemDefaultMembershipPlan });
 
   await bootstrap.ensureReady();
   await bootstrap.ensureReady();
 
   assert.equal(inspectSchema.mock.callCount(), 1);
   assert.equal(runMigration.mock.callCount(), 0);
+  assert.equal(ensureSystemDefaultMembershipPlan.mock.callCount(), 1);
 });
 
 test('ensureReady runs migration when schema is incomplete', async () => {
@@ -29,12 +31,14 @@ test('ensureReady runs migration when schema is incomplete', async () => {
     ready = true;
     return true;
   });
-  const bootstrap = new ConnectorStorageBootstrap({ inspectSchema, runMigration });
+  const ensureSystemDefaultMembershipPlan = mock.fn(async () => true);
+  const bootstrap = new ConnectorStorageBootstrap({ inspectSchema, runMigration, ensureSystemDefaultMembershipPlan });
 
   await bootstrap.ensureReady();
 
   assert.equal(inspectSchema.mock.callCount(), 2);
   assert.equal(runMigration.mock.callCount(), 1);
+  assert.equal(ensureSystemDefaultMembershipPlan.mock.callCount(), 1);
 });
 
 test('ensureReady clears failed bootstrap promise so next call can retry', async () => {
@@ -53,11 +57,13 @@ test('ensureReady clears failed bootstrap promise so next call can retry', async
     ready = true;
     return true;
   });
-  const bootstrap = new ConnectorStorageBootstrap({ inspectSchema, runMigration });
+  const ensureSystemDefaultMembershipPlan = mock.fn(async () => true);
+  const bootstrap = new ConnectorStorageBootstrap({ inspectSchema, runMigration, ensureSystemDefaultMembershipPlan });
 
   await assert.rejects(() => bootstrap.ensureReady(), /migration failed/);
   await bootstrap.ensureReady();
 
   assert.equal(inspectSchema.mock.callCount(), 3);
   assert.equal(runMigration.mock.callCount(), 2);
+  assert.equal(ensureSystemDefaultMembershipPlan.mock.callCount(), 1);
 });

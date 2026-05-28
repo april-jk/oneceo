@@ -25,7 +25,7 @@ export function buildManagedTaskInputMetadata(input: {
     : 0;
   const hasReferences =
     fileCount > 0 || input.skills.length > 0 || input.mcpReferences.length > 0;
-  const modelTier = input.modelTier || "pro";
+  const modelTier = input.modelTier || "lite";
 
   if (!hasReferences && !modelTier) {
     return undefined;

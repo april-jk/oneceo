@@ -94,7 +94,7 @@ export default function CEOView() {
   const { t } = useTranslation();
   const [message, setMessage] = useState("");
   const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
-  const [selectedModel, setSelectedModel] = useState<"lite" | "pro" | "max">("pro");
+  const [selectedModel, setSelectedModel] = useState<"lite" | "pro" | "max">("lite");
   const projects = mockProjects;
 
   // 计算统计数据

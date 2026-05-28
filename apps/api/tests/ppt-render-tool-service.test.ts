@@ -668,6 +668,7 @@ exports.chromium = {
   assert.equal(report.editablePptx, false);
   assert.equal(imageCalls[0].w, 10);
   assert.equal(imageCalls[0].h, 7.5);
+  assert.match(String(imageCalls[0].path || ''), /\.jpg$/i);
 });
 
 test('html deck renderer wraps slide fragments with shared index css before screenshotting', () => {
@@ -856,4 +857,88 @@ exports.chromium = {
   assert.equal(visualReport.status, 'completed');
   assert.equal(visualReport.slides[0].metrics.sourceCssApplied, true);
   assert.equal(visualReport.fatalErrors.length, 0);
+});
+
+test('html deck renderer keeps png screenshots for QA but rasterizes jpeg for ppt export', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'oneceo-ppt-html-render-test-'));
+  installPptxGenStub(dir, { captureImages: true });
+  const playwrightDir = path.join(dir, 'node_modules', 'playwright');
+  fs.mkdirSync(playwrightDir, { recursive: true });
+  fs.writeFileSync(path.join(playwrightDir, 'package.json'), JSON.stringify({ name: 'playwright', version: '0.0.0', main: 'index.js' }));
+  fs.writeFileSync(
+    path.join(playwrightDir, 'index.js'),
+    `
+const fs = require('node:fs');
+exports.chromium = {
+  async launch() {
+    return {
+      async newContext() {
+        return {
+          async newPage() {
+            return {
+              async goto() {},
+              async waitForTimeout() {},
+              async evaluate(fn, arg) {
+                if (arg) {
+                  return {
+                    textLength: 8,
+                    scrollWidth: arg.fallbackWidth,
+                    scrollHeight: arg.fallbackHeight,
+                    clientWidth: arg.fallbackWidth,
+                    clientHeight: arg.fallbackHeight,
+                    bodyChildren: 1,
+                    slideId: 'slide-1',
+                    slideIndex: '1',
+                    backgroundColor: 'rgb(255, 255, 255)',
+                    fontFamily: 'Aptos',
+                    styleTagCount: 1,
+                    stylesheetLinkCount: 0,
+                    renderedHtmlPath: arg.renderedHtmlPath,
+                    sourceCssApplied: arg.sourceCssApplied,
+                    sourceMode: arg.sourceMode,
+                    sharedCssApplied: arg.sharedCssApplied,
+                    slideCssApplied: arg.slideCssApplied
+                  };
+                }
+                return '导出内容';
+              },
+              async screenshot({ path, type }) { fs.writeFileSync(path, type || 'png'); },
+              async close() {}
+            };
+          },
+          async close() {}
+        };
+      },
+      async close() {}
+    };
+  }
+};
+`
+  );
+  fs.mkdirSync(path.join(dir, 'slides'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'index.html'), '<!doctype html><html><head><style>.slide{background:#fff}</style></head><body></body></html>');
+  fs.writeFileSync(path.join(dir, 'slides', '001-cover.html'), '<section class="slide" data-slide-id="slide-1" data-slide-index="1"><p>导出内容</p></section>');
+  fs.writeFileSync(path.join(dir, 'render-html-deck.mjs'), buildHtmlDeckRendererScript());
+  fs.writeFileSync(
+    path.join(dir, 'spec.json'),
+    JSON.stringify({
+      taskType: 'ppt_html_deck',
+      deck: { title: '导出格式', slideCount: 1, aspectRatio: '16:9' },
+      slides: [{ id: 'slide-1', index: 1, slideArchetype: 'cover', htmlFile: 'slides/001-cover.html' }],
+      sources: [],
+      openQuestions: [],
+    })
+  );
+
+  execFileSync(
+    process.execPath,
+    ['render-html-deck.mjs', 'spec.json', dir, 'export/deck.pptx', 'export/export-report.json', 'export/visual-qa-report.json', 'screenshots'],
+    { cwd: dir, encoding: 'utf8', env: { ...process.env, NODE_PATH: path.join(dir, 'node_modules') } }
+  );
+
+  const visualReport = JSON.parse(fs.readFileSync(path.join(dir, 'export', 'visual-qa-report.json'), 'utf8'));
+  const imageCalls = fs.readFileSync(path.join(dir, 'image-calls.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+
+  assert.match(String(visualReport.screenshots[0].path || ''), /001\.png$/i);
+  assert.match(String(imageCalls[0].path || ''), /\.ppt-images\/001\.jpg$/i);
 });

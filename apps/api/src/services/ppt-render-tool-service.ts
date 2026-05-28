@@ -1061,6 +1061,8 @@ async function buildRenderableSlide(slideSpec, index, htmlFile, slidePath) {
 await fs.mkdir(path.posix.dirname(outputPath), { recursive: true });
 await fs.mkdir(screenshotRoot, { recursive: true });
 await fs.mkdir(renderSlideRoot, { recursive: true });
+const pptImageRoot = path.posix.join(path.posix.dirname(outputPath), '.ppt-images');
+await fs.mkdir(pptImageRoot, { recursive: true });
 
 let browser;
 const qaSlides = [];
@@ -1079,6 +1081,7 @@ try {
     const htmlFile = text(slideSpec.htmlFile);
     const slidePath = resolveSlidePath(htmlFile);
     const screenshotPath = path.posix.join(screenshotRoot, String(index).padStart(3, '0') + '.png');
+    const pptImagePath = path.posix.join(pptImageRoot, String(index).padStart(3, '0') + '.jpg');
     const page = await context.newPage();
     try {
       await fs.access(slidePath);
@@ -1140,12 +1143,14 @@ try {
         slideWarnings.push({ code: 'invalid_placeholder_text' });
       }
       await page.screenshot({ path: screenshotPath, fullPage: false, type: 'png' });
+      await page.screenshot({ path: pptImagePath, fullPage: false, type: 'jpeg', quality: 90 });
       qaSlides.push({
         index,
         id: text(slideSpec.id),
         htmlFile,
         renderedHtmlPath: metrics.renderedHtmlPath,
         screenshotPath,
+        pptImagePath,
         metrics,
         warnings: slideWarnings,
       });
@@ -1197,7 +1202,7 @@ pptx.lang = text(deck.language) || 'zh-CN';
 for (const slideImage of qaSlides) {
   const slide = pptx.addSlide();
   slide.background = { color: 'FFFFFF' };
-  slide.addImage({ path: slideImage.screenshotPath, x: 0, y: 0, w: slideGeometry.widthIn, h: slideGeometry.heightIn });
+  slide.addImage({ path: slideImage.pptImagePath, x: 0, y: 0, w: slideGeometry.widthIn, h: slideGeometry.heightIn });
 }
 
 await pptx.writeFile({ fileName: outputPath });

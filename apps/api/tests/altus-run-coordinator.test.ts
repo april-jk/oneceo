@@ -5697,3 +5697,186 @@ test('execute keeps repeated debug_open_page failures recoverable so Altus can i
     .map((entry) => entry.payload.toolName);
   assert.deepEqual(completedToolNames, ['shell_execute', 'debug_open_page', 'complete_task']);
 });
+
+test('execute recovers from post-render ppt completion guard and still completes delivery', async () => {
+  const state = createState(
+    'run-ppt-post-render-guard',
+    'session-ppt-post-render-guard',
+    '请生成沐曦股份的 PPT'
+  );
+  const eventCalls: Array<{ eventType: string; payload: any }> = [];
+  const lifecycleCalls: string[] = [];
+  const lifecycleFailures: any[] = [];
+  let fetchCount = 0;
+
+  const setupService = {
+    ensurePreparedRunEnvironment: mock.fn(async () => ({
+      runtimeSnapshot: {
+        tier: 'pro',
+        model: 'altus-model',
+        apiType: 'openai',
+        baseUrl: 'https://example.test/v1',
+        tokenState: 'configured',
+        baseUrlHost: 'example.test',
+        billingTargetKey: 'agent.pro',
+        billingTargetType: 'agent_tier',
+        runtimeSnapshotVersion: 'agent-runtime-v1',
+      },
+      provider: {
+        model: 'altus-model',
+        apiType: 'openai',
+        baseUrl: 'https://example.test/v1',
+        apiKey: 'test-key',
+      },
+      sandbox: {
+        sandboxId: 'sandbox-ppt-post-render',
+        workspaceRoot: '/workspace/session-ppt-post-render',
+        reused: false,
+      },
+      managedContext: {
+        connectors: [],
+        mcpProviders: [],
+        skillCatalog: [],
+        skills: [
+          {
+            sourceType: 'platform',
+            skillId: 'skill-ppt-workflow',
+            revisionId: 'rev-ppt-workflow',
+            slug: 'ppt-workflow',
+            name: 'PPT 工作流',
+            description: 'PPT 子任务编排',
+            category: 'office',
+            renderedMarkdown: '# Skill Brief',
+            revisionNumber: 1,
+            resourceSummary: null,
+          },
+        ],
+        taskIntentProfile: {
+          shouldUseTodoWorkflow: true,
+        },
+      },
+    })),
+  };
+
+  const eventWriter = {
+    appendRunEvent: mock.fn(async (_runId: string, eventType: string, payload: any) => {
+      eventCalls.push({ eventType, payload });
+    }),
+  };
+
+  const lifecycleService = {
+    markRunning: mock.fn(async () => {
+      lifecycleCalls.push('running');
+    }),
+    markWaitingUser: mock.fn(async () => {
+      lifecycleCalls.push('waiting_user');
+    }),
+    markCompleted: mock.fn(async () => {
+      lifecycleCalls.push('completed');
+    }),
+    markFailed: mock.fn(async (_runId: string, payload: any) => {
+      lifecycleCalls.push('failed');
+      lifecycleFailures.push(payload);
+    }),
+    markStopped: mock.fn(async () => {
+      lifecycleCalls.push('stopped');
+    }),
+  };
+
+  global.fetch = mock.fn(async () => {
+    fetchCount += 1;
+    if (fetchCount === 1) {
+      return new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: '渲染已经成功，我先更新 todo 再收尾。',
+                tool_calls: [
+                  {
+                    id: 'tool-post-render-todo',
+                    type: 'function',
+                    function: {
+                      name: 'todowrite',
+                      arguments: JSON.stringify({
+                        todos: [
+                          { content: '1. 渲染 PPT', status: 'completed', activeForm: '已完成' },
+                          { content: '2. 完成交付', status: 'in_progress', activeForm: '完成交付' },
+                        ],
+                      }),
+                    },
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+    return new Response(
+      JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: '',
+              tool_calls: [
+                {
+                  id: 'tool-complete-after-render-guard',
+                  type: 'function',
+                  function: {
+                    name: 'complete_task',
+                    arguments: JSON.stringify({
+                      summary: 'PPT 已生成并完成交付。',
+                      verification: ['render_pptx_from_html_deck 已成功生成最终 PPTX'],
+                      attachments: [{ path: 'ppt-html-deck/export/沐曦股份深度战略分析.pptx' }],
+                    }),
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    );
+  }) as typeof fetch;
+
+  let executeCount = 0;
+  mock.method(AltusManagedToolRuntime.prototype, 'execute', async (toolName: string) => {
+    executeCount += 1;
+    if (toolName === 'todowrite') {
+      throw new Error(
+        'ppt_workflow_render_completed_complete_task_required:ppt-html-deck/export/沐曦股份深度战略分析.pptx'
+      );
+    }
+    if (toolName === 'complete_task') {
+      return {
+        type: 'complete' as const,
+        summary: 'PPT 已生成并完成交付。',
+        verification: ['render_pptx_from_html_deck 已成功生成最终 PPTX'],
+        attachments: [{ path: 'ppt-html-deck/export/沐曦股份深度战略分析.pptx' }],
+      };
+    }
+    throw new Error(`unexpected tool: ${toolName}`);
+  });
+
+  const coordinator = new AltusRunCoordinator(
+    setupService as any,
+    eventWriter as any,
+    lifecycleService as any,
+  );
+
+  await coordinator.execute(state, new AbortController());
+
+  assert.equal(executeCount, 2);
+  assert.equal(fetchCount, 2);
+  assert.equal(state.status, 'completed');
+  assert.equal(lifecycleFailures.length, 0);
+  const failedEvent = eventCalls.find((entry) => entry.eventType === 'tool_call_failed' && entry.payload.toolName === 'todowrite');
+  assert.equal((failedEvent?.payload as any)?.transitionReason, 'tool_failed_but_recoverable');
+  const completedToolNames = eventCalls
+    .filter((entry) => entry.eventType === 'tool_call_completed')
+    .map((entry) => entry.payload.toolName);
+  assert.deepEqual(completedToolNames, ['complete_task']);
+});

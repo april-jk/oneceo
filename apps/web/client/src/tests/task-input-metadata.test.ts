@@ -69,7 +69,7 @@ describe("buildManagedTaskInputMetadata", () => {
     });
   });
 
-  it("keeps an explicit max model tier", () => {
+  it("normalizes unavailable model tiers back to lite", () => {
     expect(
       buildManagedTaskInputMetadata({
         originalInput: "run with max tier",
@@ -79,7 +79,7 @@ describe("buildManagedTaskInputMetadata", () => {
         modelTier: "max",
       }),
     ).toEqual({
-      modelTier: "max",
+      modelTier: "lite",
       originalInput: "run with max tier",
     });
   });

@@ -34,12 +34,19 @@ import {
   type PendingAttachment,
 } from "@/lib/task-attachments";
 import type { TaskCreationPlatformSkill } from "@/lib/task-creation-client";
+import {
+  AGENT_MODEL_TIER_LABELS,
+  AVAILABLE_AGENT_MODEL_TIERS,
+  DEFAULT_AGENT_MODEL_TIER,
+  type AgentModelTier,
+} from "@/lib/agent-model-tiers";
 
 export default function AIAgent() {
   const [, setLocation] = useLocation();
   const [message, setMessage] = useState("");
   const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
-  const [selectedModel, setSelectedModel] = useState("Agent Pro");
+  const [selectedModel, setSelectedModel] =
+    useState<AgentModelTier>(DEFAULT_AGENT_MODEL_TIER);
 
   const handleSend = () => {
     const value = message.trim() || (attachments.length ? DEFAULT_ATTACHMENT_PROMPT : "");
@@ -145,7 +152,9 @@ export default function AIAgent() {
                               className="h-9 px-3 rounded-xl hover:bg-muted transition-colors gap-2"
                             >
                               <Sparkles className="w-4 h-4 text-muted-foreground" />
-                              <span className="text-sm text-muted-foreground">{selectedModel}</span>
+                              <span className="text-sm text-muted-foreground">
+                                {AGENT_MODEL_TIER_LABELS[selectedModel]}
+                              </span>
                             </Button>
                           </DropdownMenuTrigger>
                         </TooltipTrigger>
@@ -154,24 +163,21 @@ export default function AIAgent() {
                         </TooltipContent>
                       </Tooltip>
                       <DropdownMenuContent align="start" className="w-40">
-                        <DropdownMenuItem onClick={() => setSelectedModel("Agent Lite")}>
-                          <div className="flex flex-col">
-                            <span className="font-medium">Agent Lite</span>
-                            <span className="text-xs text-muted-foreground">Fast & efficient</span>
-                          </div>
-                        </DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => setSelectedModel("Agent Pro")}>
-                          <div className="flex flex-col">
-                            <span className="font-medium">Agent Pro</span>
-                            <span className="text-xs text-muted-foreground">Balanced performance</span>
-                          </div>
-                        </DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => setSelectedModel("Agent Max")}>
-                          <div className="flex flex-col">
-                            <span className="font-medium">Agent Max</span>
-                            <span className="text-xs text-muted-foreground">Maximum capability</span>
-                          </div>
-                        </DropdownMenuItem>
+                        {AVAILABLE_AGENT_MODEL_TIERS.map((tier) => (
+                          <DropdownMenuItem
+                            key={tier}
+                            onClick={() => setSelectedModel(tier)}
+                          >
+                            <div className="flex flex-col">
+                              <span className="font-medium">
+                                {AGENT_MODEL_TIER_LABELS[tier]}
+                              </span>
+                              <span className="text-xs text-muted-foreground">
+                                Fast & efficient
+                              </span>
+                            </div>
+                          </DropdownMenuItem>
+                        ))}
                       </DropdownMenuContent>
                     </DropdownMenu>
                   </div>

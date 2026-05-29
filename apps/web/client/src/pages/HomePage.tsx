@@ -26,6 +26,11 @@ import UserMenu from "@/components/UserMenu";
 import { useAuth } from "@/contexts/AuthContext";
 import type { TaskCreationPlatformSkill } from "@/lib/task-creation-client";
 import {
+  AVAILABLE_AGENT_MODEL_TIERS,
+  DEFAULT_AGENT_MODEL_TIER,
+  type AgentModelTier,
+} from "@/lib/agent-model-tiers";
+import {
   DEFAULT_ATTACHMENT_PROMPT,
   mergePendingAttachments,
   mergePendingPlatformSkills,
@@ -81,7 +86,8 @@ export default function HomePage() {
   const { status } = useAuth();
   const [message, setMessage] = useState("");
   const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
-  const [selectedModel, setSelectedModel] = useState<"lite" | "pro" | "max">("lite");
+  const [selectedModel, setSelectedModel] =
+    useState<AgentModelTier>(DEFAULT_AGENT_MODEL_TIER);
   const quickActionRows = t("homePage.quickActions", { returnObjects: true }) as string[][];
 
   useEffect(() => {
@@ -208,27 +214,16 @@ export default function HomePage() {
                         <TooltipContent><p>{t("homePage.selectModel")}</p></TooltipContent>
                       </Tooltip>
                       <DropdownMenuContent align="start" className="w-40">
-                        <DropdownMenuItem
-                          data-umami-event="landing_model_select"
-                          data-umami-event-model="lite"
-                          onClick={() => setSelectedModel("lite")}
-                        >
-                          {t("homePage.models.lite")}
-                        </DropdownMenuItem>
-                        <DropdownMenuItem
-                          data-umami-event="landing_model_select"
-                          data-umami-event-model="pro"
-                          onClick={() => setSelectedModel("pro")}
-                        >
-                          {t("homePage.models.pro")}
-                        </DropdownMenuItem>
-                        <DropdownMenuItem
-                          data-umami-event="landing_model_select"
-                          data-umami-event-model="max"
-                          onClick={() => setSelectedModel("max")}
-                        >
-                          {t("homePage.models.max")}
-                        </DropdownMenuItem>
+                        {AVAILABLE_AGENT_MODEL_TIERS.map((tier) => (
+                          <DropdownMenuItem
+                            key={tier}
+                            data-umami-event="landing_model_select"
+                            data-umami-event-model={tier}
+                            onClick={() => setSelectedModel(tier)}
+                          >
+                            {t(`homePage.models.${tier}`)}
+                          </DropdownMenuItem>
+                        ))}
                       </DropdownMenuContent>
                     </DropdownMenu>
                   </div>

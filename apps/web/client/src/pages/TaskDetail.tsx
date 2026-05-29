@@ -43,6 +43,11 @@ import ConnectorDialog from "@/components/ConnectorDialog";
 import AttachmentChipList from "@/components/AttachmentChipList";
 import AttachmentPickerButton from "@/components/AttachmentPickerButton";
 import { mergePendingAttachments, type PendingAttachment } from "@/lib/task-attachments";
+import {
+  AVAILABLE_AGENT_MODEL_TIERS,
+  DEFAULT_AGENT_MODEL_TIER,
+  type AgentModelTier,
+} from "@/lib/agent-model-tiers";
 
 interface Message {
   id: string;
@@ -68,7 +73,8 @@ export default function TaskDetail() {
   const [ceoMessage, setCeoMessage] = useState("");
   const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
   const [selectedDeliverable, setSelectedDeliverable] = useState<any>(null);
-  const [selectedModel, setSelectedModel] = useState<"lite" | "pro" | "max">("lite");
+  const [selectedModel, setSelectedModel] =
+    useState<AgentModelTier>(DEFAULT_AGENT_MODEL_TIER);
 
   // Mock data - 模拟经理-员工对话数据
   const taskInfo = {
@@ -365,36 +371,21 @@ export default function TaskDetail() {
                           </TooltipContent>
                         </Tooltip>
                         <DropdownMenuContent align="start" className="w-48">
-                          <DropdownMenuItem
-                            onClick={() => setSelectedModel("lite")}
-                          >
-                            <div className="flex flex-col gap-1">
-                              <span className="font-medium">{t("homePage.models.lite")}</span>
-                              <span className="text-xs text-muted-foreground">
-                                {t("ceoView.modelLiteHint")}
-                              </span>
-                            </div>
-                          </DropdownMenuItem>
-                          <DropdownMenuItem
-                            onClick={() => setSelectedModel("pro")}
-                          >
-                            <div className="flex flex-col gap-1">
-                              <span className="font-medium">{t("homePage.models.pro")}</span>
-                              <span className="text-xs text-muted-foreground">
-                                {t("ceoView.modelProHint")}
-                              </span>
-                            </div>
-                          </DropdownMenuItem>
-                          <DropdownMenuItem
-                            onClick={() => setSelectedModel("max")}
-                          >
-                            <div className="flex flex-col gap-1">
-                              <span className="font-medium">{t("homePage.models.max")}</span>
-                              <span className="text-xs text-muted-foreground">
-                                {t("ceoView.modelMaxHint")}
-                              </span>
-                            </div>
-                          </DropdownMenuItem>
+                          {AVAILABLE_AGENT_MODEL_TIERS.map((tier) => (
+                            <DropdownMenuItem
+                              key={tier}
+                              onClick={() => setSelectedModel(tier)}
+                            >
+                              <div className="flex flex-col gap-1">
+                                <span className="font-medium">
+                                  {t(`homePage.models.${tier}`)}
+                                </span>
+                                <span className="text-xs text-muted-foreground">
+                                  {t("ceoView.modelLiteHint")}
+                                </span>
+                              </div>
+                            </DropdownMenuItem>
+                          ))}
                         </DropdownMenuContent>
                       </DropdownMenu>
                     </div>

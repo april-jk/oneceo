@@ -8,6 +8,7 @@ import { taskCreationSessionDAO, taskSessionRunDAO } from '../src/db/dao';
 import { altusManagedSetupService } from '../src/services/altus-managed-setup-service';
 import { altusMemoryContextService } from '../src/services/altus-memory-context-service';
 import { altusRunCoordinator } from '../src/services/altus-run-coordinator';
+import { membershipService } from '../src/services/membership-service';
 import { opencodeRemoteService } from '../src/services/opencode-remote-service';
 
 afterEach(() => {
@@ -451,6 +452,14 @@ test('TaskCreationService execution handoff uses Altus coordinator and never cal
     snapshotId: 'mcp-snapshot-1',
     providers: [],
   }));
+  mock.method(membershipService, 'assertUserCanUseAgentLevel', async () => ({
+    level: 'lite',
+    entitlement: {
+      membership: { id: 'membership-1' },
+      plan: { id: 'default-plan' },
+      allowedAgentLevels: ['lite'],
+    },
+  }) as any);
   mock.method(altusMemoryContextService, 'buildPromptSectionForRun', async () => ({
     userMemory: {
       preferredName: '',
@@ -528,4 +537,71 @@ test('TaskCreationService execution handoff uses Altus coordinator and never cal
   assert.equal(capturedState?.input?.taskIntentProfile?.deploymentAllowed, false);
   assert.doesNotMatch(JSON.stringify(callbackMessages), /OpenCode/);
   assert.match(String(persisted.getSavedExecutionPlanRecord()?.projectTitle || ''), /Python 脚本/);
+});
+
+test('TaskCreationService execution handoff preserves membership entitlement errors', async () => {
+  process.env.OSAC_EXECUTION_ENABLED = 'true';
+  process.env.OSAC_EXECUTION_MODE = 'opencode_remote';
+  installTaskCreationDaoMocks();
+  const callbackMessages: any[] = [];
+  const service = new TaskCreationService({
+    onMessage: (message) => callbackMessages.push(message),
+    onAskUser: async () => {
+      throw new Error('script task should not ask for clarification');
+    },
+  });
+
+  mock.method(taskCreationFileMemoryStore, 'getSession', async () => ({
+    id: 'session-routing-test',
+    title: 'Python CSV task',
+  }) as any);
+  mock.method(altusManagedSetupService, 'ensureSessionOwnership', async () => ({
+    id: 'session-routing-test',
+    userId: 'user-routing-test',
+  }) as any);
+  mock.method(altusManagedSetupService, 'captureConnectorSnapshot', async () => ({
+    snapshotId: 'connector-snapshot-1',
+    statuses: [],
+  }));
+  mock.method(altusManagedSetupService, 'captureMcpToolSnapshot', async () => ({
+    snapshotId: 'mcp-snapshot-1',
+    providers: [],
+  }));
+  mock.method(membershipService, 'assertUserCanUseAgentLevel', async () => {
+    throw new Error('当前会员类型仅允许使用 agent lite');
+  });
+  const createRunMock = mock.method(taskSessionRunDAO, 'createRun', async () => {
+    throw new Error('run should not be created after entitlement denial');
+  });
+  const coordinatorExecuteMock = mock.method(altusRunCoordinator, 'execute', async () => {
+    throw new Error('coordinator should not run after entitlement denial');
+  });
+
+  mock.method((service as any).layer1, 'execute', async () => {
+    throw new Error('deterministic classifier should bypass layer1 llm');
+  });
+  mock.method((service as any).layer2, 'execute', async () => {
+    throw new Error('deterministic classifier should bypass layer2 llm');
+  });
+  mock.method((service as any).layer3, 'generateExecutionPlan', async (taskDescription: any) => ({
+    project: {
+      title: taskDescription.title,
+      description: taskDescription.objective,
+      managers: [],
+    },
+  }));
+
+  await assert.rejects(
+    () =>
+      service.createTask(
+        '写一个 Python 脚本分析 CSV 并输出 Markdown 报告，不要部署。',
+        'user-routing-test',
+        'session-routing-test',
+        { modelTier: 'pro' } as any
+      ),
+    /当前会员类型仅允许使用 agent lite/
+  );
+  assert.equal(createRunMock.mock.callCount(), 0);
+  assert.equal(coordinatorExecuteMock.mock.callCount(), 0);
+  assert.match(JSON.stringify(callbackMessages), /当前会员类型仅允许使用 agent lite/);
 });

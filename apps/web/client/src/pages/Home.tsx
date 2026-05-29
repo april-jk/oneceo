@@ -160,6 +160,12 @@ import {
   type TaskCreationMcpReference,
 } from "@/lib/task-input-metadata";
 import {
+  AVAILABLE_AGENT_MODEL_TIERS,
+  DEFAULT_AGENT_MODEL_TIER,
+  normalizeAvailableAgentModelTier,
+  type AgentModelTier,
+} from "@/lib/agent-model-tiers";
+import {
   buildTaskSessionDeploymentPrompt,
   type TaskSessionDeploymentPromptAction,
 } from "@/lib/task-session-deployment-prompts";
@@ -188,8 +194,6 @@ export function resolveHomeSubmitActiveSessionId(input: {
   return (input.sessionId || input.uploadSessionId || "").trim();
 }
 
-type HomeScenarioModel = "lite" | "pro" | "max";
-
 type HomeCapabilityExample = {
   id: string;
   title: string;
@@ -202,7 +206,7 @@ type HomeCapabilityGuideItem = {
   label: string;
   description: string;
   icon: LucideIcon;
-  model: HomeScenarioModel;
+  model: AgentModelTier;
   prompt: string;
   examples: HomeCapabilityExample[];
   skillHints?: string[];
@@ -1227,8 +1231,8 @@ export default function Home() {
   const refreshCreditsRef = useRef(refreshCredits);
   const voiceInputBaseRef = useRef("");
   const lastCreditRefreshRunStatusRef = useRef<string | null>(null);
-  const [selectedModel, setSelectedModel] = useState<"lite" | "pro" | "max">(
-    "lite",
+  const [selectedModel, setSelectedModel] = useState<AgentModelTier>(
+    DEFAULT_AGENT_MODEL_TIER,
   );
   const [previewOpen, setPreviewOpen] = useState(false);
   const [previewMaximized, setPreviewMaximized] = useState(false);
@@ -1452,7 +1456,7 @@ export default function Home() {
       setScenarioDemo(demo);
       setSelectedCapabilityId(demo.id);
       setSelectedCapabilityExampleId(exampleId ?? null);
-      setSelectedModel(demo.model);
+      setSelectedModel(normalizeAvailableAgentModelTier(demo.model));
       setModelMenuOpen(false);
       setMessage(prompt);
     },
@@ -1600,7 +1604,7 @@ export default function Home() {
     setSelectedCapabilityId(demo.id);
     setSelectedCapabilityExampleId(exampleId);
     setSelectedCapabilityCategory(nextCategory ?? null);
-    setSelectedModel(demo.model);
+    setSelectedModel(normalizeAvailableAgentModelTier(demo.model));
     setModelMenuOpen(false);
     if (hasExplicitPrompt) {
       applyScenarioPrompt(demo, prompt, exampleId);
@@ -1689,7 +1693,7 @@ export default function Home() {
       return;
     }
     if (step.id === "scenario-model") {
-      setSelectedModel(scenarioDemo.model);
+      setSelectedModel(normalizeAvailableAgentModelTier(scenarioDemo.model));
       setModelMenuOpen(true);
       return;
     }
@@ -3806,42 +3810,21 @@ export default function Home() {
                           </TooltipContent>
                         </Tooltip>
                         <DropdownMenuContent align="start" className="w-40">
-                          <DropdownMenuItem
-                            onClick={() => setSelectedModel("lite")}
-                          >
-                            <div className="flex flex-col">
-                              <span className="font-medium">
-                                {t("homePage.models.lite")}
-                              </span>
-                              <span className="text-xs text-muted-foreground">
-                                {t("ceoView.modelLiteHint")}
-                              </span>
-                            </div>
-                          </DropdownMenuItem>
-                          <DropdownMenuItem
-                            onClick={() => setSelectedModel("pro")}
-                          >
-                            <div className="flex flex-col">
-                              <span className="font-medium">
-                                {t("homePage.models.pro")}
-                              </span>
-                              <span className="text-xs text-muted-foreground">
-                                {t("ceoView.modelProHint")}
-                              </span>
-                            </div>
-                          </DropdownMenuItem>
-                          <DropdownMenuItem
-                            onClick={() => setSelectedModel("max")}
-                          >
-                            <div className="flex flex-col">
-                              <span className="font-medium">
-                                {t("homePage.models.max")}
-                              </span>
-                              <span className="text-xs text-muted-foreground">
-                                {t("ceoView.modelMaxHint")}
-                              </span>
-                            </div>
-                          </DropdownMenuItem>
+                          {AVAILABLE_AGENT_MODEL_TIERS.map((tier) => (
+                            <DropdownMenuItem
+                              key={tier}
+                              onClick={() => setSelectedModel(tier)}
+                            >
+                              <div className="flex flex-col">
+                                <span className="font-medium">
+                                  {t(`homePage.models.${tier}`)}
+                                </span>
+                                <span className="text-xs text-muted-foreground">
+                                  {t("ceoView.modelLiteHint")}
+                                </span>
+                              </div>
+                            </DropdownMenuItem>
+                          ))}
                         </DropdownMenuContent>
                       </DropdownMenu>
                     </div>
@@ -4092,42 +4075,21 @@ export default function Home() {
                                 align="start"
                                 className="w-40"
                               >
-                                <DropdownMenuItem
-                                  onClick={() => setSelectedModel("lite")}
-                                >
-                                  <div className="flex flex-col">
-                                    <span className="font-medium">
-                                      {t("homePage.models.lite")}
-                                    </span>
-                                    <span className="text-xs text-muted-foreground">
-                                      {t("ceoView.modelLiteHint")}
-                                    </span>
-                                  </div>
-                                </DropdownMenuItem>
-                                <DropdownMenuItem
-                                  onClick={() => setSelectedModel("pro")}
-                                >
-                                  <div className="flex flex-col">
-                                    <span className="font-medium">
-                                      {t("homePage.models.pro")}
-                                    </span>
-                                    <span className="text-xs text-muted-foreground">
-                                      {t("ceoView.modelProHint")}
-                                    </span>
-                                  </div>
-                                </DropdownMenuItem>
-                                <DropdownMenuItem
-                                  onClick={() => setSelectedModel("max")}
-                                >
-                                  <div className="flex flex-col">
-                                    <span className="font-medium">
-                                      {t("homePage.models.max")}
-                                    </span>
-                                    <span className="text-xs text-muted-foreground">
-                                      {t("ceoView.modelMaxHint")}
-                                    </span>
-                                  </div>
-                                </DropdownMenuItem>
+                                {AVAILABLE_AGENT_MODEL_TIERS.map((tier) => (
+                                  <DropdownMenuItem
+                                    key={tier}
+                                    onClick={() => setSelectedModel(tier)}
+                                  >
+                                    <div className="flex flex-col">
+                                      <span className="font-medium">
+                                        {t(`homePage.models.${tier}`)}
+                                      </span>
+                                      <span className="text-xs text-muted-foreground">
+                                        {t("ceoView.modelLiteHint")}
+                                      </span>
+                                    </div>
+                                  </DropdownMenuItem>
+                                ))}
                               </DropdownMenuContent>
                             </DropdownMenu>
                           </div>

@@ -1,4 +1,9 @@
 import type { TaskCreationPlatformSkill } from "@/lib/task-creation-client";
+import {
+  DEFAULT_AGENT_MODEL_TIER,
+  normalizeAvailableAgentModelTier,
+  type AgentModelTier,
+} from "@/lib/agent-model-tiers";
 
 export type TaskCreationMcpReference = {
   key: string;
@@ -9,7 +14,7 @@ export type TaskCreationMcpReference = {
 export type ManagedTaskInputMetadata = {
   skills?: TaskCreationPlatformSkill[];
   mcpReferences?: TaskCreationMcpReference[];
-  modelTier?: "lite" | "pro" | "max";
+  modelTier?: AgentModelTier;
   originalInput: string;
 };
 
@@ -18,14 +23,16 @@ export function buildManagedTaskInputMetadata(input: {
   skills: TaskCreationPlatformSkill[];
   mcpReferences: TaskCreationMcpReference[];
   fileCount: number;
-  modelTier?: "lite" | "pro" | "max";
+  modelTier?: AgentModelTier;
 }): ManagedTaskInputMetadata | undefined {
   const fileCount = Number.isFinite(input.fileCount)
     ? Math.max(0, Math.floor(input.fileCount))
     : 0;
   const hasReferences =
     fileCount > 0 || input.skills.length > 0 || input.mcpReferences.length > 0;
-  const modelTier = input.modelTier || "lite";
+  const modelTier = normalizeAvailableAgentModelTier(
+    input.modelTier || DEFAULT_AGENT_MODEL_TIER,
+  );
 
   if (!hasReferences && !modelTier) {
     return undefined;

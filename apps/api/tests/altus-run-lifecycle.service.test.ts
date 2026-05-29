@@ -124,10 +124,10 @@ test('markFailed persists sanitized error timeline and failed event', async () =
       sessionId: 'session-failed',
       role: 'agent',
       messageType: 'assistant_message',
-      content: '视觉检测暂时无法继续：同一个预览地址连续未能打开。平台已停止重复尝试以避免继续消耗积分，并保留了已完成的检查记录；请先确认预览服务、端口或文件路径后重新运行。',
+      content: '视觉检测发现同一个预览地址连续未能打开。平台已阻止继续重复截图，并保留了检查记录；Altus 将先调查并修复预览服务、端口或文件路径后再继续。',
       metadata: {
         runId: 'run-failed',
-        error: '视觉检测暂时无法继续：同一个预览地址连续未能打开。平台已停止重复尝试以避免继续消耗积分，并保留了已完成的检查记录；请先确认预览服务、端口或文件路径后重新运行。',
+        error: '视觉检测发现同一个预览地址连续未能打开。平台已阻止继续重复截图，并保留了检查记录；Altus 将先调查并修复预览服务、端口或文件路径后再继续。',
         reasonCode: 'debug_open_page_repeat_blocked',
       },
       messageKey: 'managed:run-failed:failed_assistant',
@@ -139,10 +139,10 @@ test('markFailed persists sanitized error timeline and failed event', async () =
       sessionId: 'session-failed',
       role: 'system',
       messageType: 'error',
-      content: '视觉检测暂时无法继续：同一个预览地址连续未能打开。平台已停止重复尝试以避免继续消耗积分，并保留了已完成的检查记录；请先确认预览服务、端口或文件路径后重新运行。',
+      content: '视觉检测发现同一个预览地址连续未能打开。平台已阻止继续重复截图，并保留了检查记录；Altus 将先调查并修复预览服务、端口或文件路径后再继续。',
       metadata: {
         runId: 'run-failed',
-        error: '视觉检测暂时无法继续：同一个预览地址连续未能打开。平台已停止重复尝试以避免继续消耗积分，并保留了已完成的检查记录；请先确认预览服务、端口或文件路径后重新运行。',
+        error: '视觉检测发现同一个预览地址连续未能打开。平台已阻止继续重复截图，并保留了检查记录；Altus 将先调查并修复预览服务、端口或文件路径后再继续。',
         reasonCode: 'debug_open_page_repeat_blocked',
       },
       messageKey: 'managed:run-failed:failed',
@@ -156,12 +156,49 @@ test('markFailed persists sanitized error timeline and failed event', async () =
     'run_failed',
     {
       status: 'failed',
-      content: '视觉检测暂时无法继续：同一个预览地址连续未能打开。平台已停止重复尝试以避免继续消耗积分，并保留了已完成的检查记录；请先确认预览服务、端口或文件路径后重新运行。',
-      error: '视觉检测暂时无法继续：同一个预览地址连续未能打开。平台已停止重复尝试以避免继续消耗积分，并保留了已完成的检查记录；请先确认预览服务、端口或文件路径后重新运行。',
+      content: '视觉检测发现同一个预览地址连续未能打开。平台已阻止继续重复截图，并保留了检查记录；Altus 将先调查并修复预览服务、端口或文件路径后再继续。',
+      error: '视觉检测发现同一个预览地址连续未能打开。平台已阻止继续重复截图，并保留了检查记录；Altus 将先调查并修复预览服务、端口或文件路径后再继续。',
       reasonCode: 'debug_open_page_repeat_blocked',
       internalView: {
         detail: rawError,
       },
     },
   ]);
+});
+
+test('markFailed keeps membership entitlement failures visible to users', async () => {
+  const state = createState('run-membership-failed', 'session-membership-failed');
+  const rawError = '当前会员类型仅允许使用 agent lite';
+  state.markFailed(rawError);
+
+  mock.method(taskSessionRunDAO, 'updateRunStatus', async () => ({}) as any);
+  const setupService = {
+    updateSessionLifecycle: mock.fn(async () => {}),
+    persistTimelineMessage: mock.fn(async () => {}),
+  };
+  const eventWriter = {
+    appendRunEvent: mock.fn(async () => ({ sequence: 4, payload: {} })),
+  };
+
+  const service = new AltusRunLifecycleService(setupService as any, eventWriter as any);
+  await service.markFailed(state, rawError);
+
+  assert.deepEqual((setupService.persistTimelineMessage as any).mock.calls[0]?.arguments, [
+    {
+      sessionId: 'session-membership-failed',
+      role: 'agent',
+      messageType: 'assistant_message',
+      content: rawError,
+      metadata: {
+        runId: 'run-membership-failed',
+        error: rawError,
+        reasonCode: 'membership_entitlement_denied',
+      },
+      messageKey: 'managed:run-membership-failed:failed_assistant',
+    },
+  ]);
+  assert.equal(
+    (eventWriter.appendRunEvent as any).mock.calls[0]?.arguments[4].reasonCode,
+    'membership_entitlement_denied'
+  );
 });

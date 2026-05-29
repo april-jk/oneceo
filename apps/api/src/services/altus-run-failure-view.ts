@@ -47,10 +47,23 @@ function publicMessageForReason(reasonCode: string) {
   }
 }
 
+function publicMembershipMessage(rawMessage: string) {
+  if (rawMessage.includes('当前会员类型仅允许使用')) {
+    return rawMessage;
+  }
+  if (rawMessage.includes('当前用户没有启用中的会员类型')) {
+    return rawMessage;
+  }
+  return '';
+}
+
 function classifyRunFailureReason(rawMessage: string, explicitReasonCode?: string) {
   const explicit = asText(explicitReasonCode);
   if (explicit) return explicit;
   const normalized = rawMessage.toLowerCase();
+  if (rawMessage.includes('当前会员类型仅允许使用') || rawMessage.includes('当前用户没有启用中的会员类型')) {
+    return 'membership_entitlement_denied';
+  }
   if (normalized.includes('insufficient_credits')) return 'insufficient_credits';
   if (normalized.includes('managed_run_tool_round_limit_exceeded')) return 'managed_run_tool_round_limit_exceeded';
   return classifyManagedToolErrorCode(rawMessage);
@@ -64,9 +77,11 @@ export function buildAltusRunFailureDescriptor(input: {
   const rawMessage = asText(input.rawMessage);
   const reasonCode = classifyRunFailureReason(rawMessage, input.reasonCode);
   const mappedMessage = publicMessageForReason(reasonCode);
+  const membershipMessage = publicMembershipMessage(rawMessage);
   const providedUserMessage = asText(input.userMessage);
   const userMessage =
     mappedMessage ||
+    membershipMessage ||
     (providedUserMessage && !hasInternalDiagnosticText(providedUserMessage)
       ? truncate(providedUserMessage, 800)
       : DEFAULT_USER_MESSAGE);

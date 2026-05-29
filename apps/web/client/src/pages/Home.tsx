@@ -215,7 +215,7 @@ const HOME_CAPABILITY_GUIDE_ITEMS: HomeCapabilityGuideItem[] = [
     label: "制作幻灯片",
     description: "从目标、素材到可复核大纲",
     icon: FileText,
-    model: "max",
+    model: "lite",
     prompt: `请帮我制作一份面向 CEO 的产品复盘汇报 PPT。
 
 目标：
@@ -256,7 +256,7 @@ const HOME_CAPABILITY_GUIDE_ITEMS: HomeCapabilityGuideItem[] = [
     label: "创建网站",
     description: "从需求到结构、文案和验收",
     icon: Rocket,
-    model: "max",
+    model: "lite",
     prompt: `请帮我复盘一个 SaaS 产品发布页改版任务。
 
 目标：
@@ -314,7 +314,7 @@ const HOME_CAPABILITY_GUIDE_ITEMS: HomeCapabilityGuideItem[] = [
     label: "开发应用",
     description: "拆需求、写代码、预览和部署",
     icon: Terminal,
-    model: "max",
+    model: "lite",
     prompt: `请帮我设计并推进一个内部运营看板应用。
 
 目标：
@@ -350,7 +350,7 @@ const HOME_CAPABILITY_GUIDE_ITEMS: HomeCapabilityGuideItem[] = [
     label: "深度研究",
     description: "收集证据、归纳判断和引用来源",
     icon: Search,
-    model: "max",
+    model: "lite",
     prompt: `请帮我做一次 AI Agent 平台竞品研究。
 
 目标：
@@ -387,7 +387,7 @@ const HOME_CAPABILITY_GUIDE_ITEMS: HomeCapabilityGuideItem[] = [
     label: "分析表格",
     description: "清洗数据、找异常和做图表",
     icon: FileSearch,
-    model: "pro",
+    model: "lite",
     prompt: `请帮我分析一份团队运营表格。
 
 目标：
@@ -423,7 +423,7 @@ const HOME_CAPABILITY_GUIDE_ITEMS: HomeCapabilityGuideItem[] = [
     label: "项目拆解",
     description: "把目标变成可分配计划",
     icon: FolderSearch2,
-    model: "pro",
+    model: "lite",
     prompt: `请帮我把“上线企业级权限系统”拆成一个可执行项目。
 
 目标：
@@ -459,7 +459,7 @@ const HOME_CAPABILITY_GUIDE_ITEMS: HomeCapabilityGuideItem[] = [
     label: "修复问题",
     description: "定位缺陷、修代码和补验证",
     icon: Bug,
-    model: "max",
+    model: "lite",
     prompt: `请帮我定位并修复一个前端交互问题。
 
 现象：
@@ -499,7 +499,7 @@ const HOME_CAPABILITY_GUIDE_ITEMS: HomeCapabilityGuideItem[] = [
     label: "资料整合",
     description: "汇总多源材料形成可用结论",
     icon: FileSearch,
-    model: "pro",
+    model: "lite",
     prompt: `请帮我整理一次多来源资料分析任务。
 
 目标：
@@ -536,7 +536,7 @@ const HOME_CAPABILITY_GUIDE_ITEMS: HomeCapabilityGuideItem[] = [
     label: "数据可视化",
     description: "把运营数据变成可解释图表",
     icon: FileDiff,
-    model: "pro",
+    model: "lite",
     prompt: `请帮我设计一个 CEO 运营可视化看板。
 
 目标：
@@ -573,7 +573,7 @@ const HOME_CAPABILITY_GUIDE_ITEMS: HomeCapabilityGuideItem[] = [
     label: "文档/PDF",
     description: "整理文档、审阅材料和生成报告",
     icon: FilePlus,
-    model: "pro",
+    model: "lite",
     prompt: `请帮我整理一份客户项目复盘文档。
 
 目标：
@@ -609,7 +609,7 @@ const HOME_CAPABILITY_GUIDE_ITEMS: HomeCapabilityGuideItem[] = [
     label: "经营复盘",
     description: "跨项目梳理风险、进度和动作",
     icon: ChevronRight,
-    model: "pro",
+    model: "lite",
     prompt: `请帮我准备一次经营复盘。
 
 目标：
@@ -646,7 +646,7 @@ const HOME_CAPABILITY_GUIDE_ITEMS: HomeCapabilityGuideItem[] = [
     label: "部署上线",
     description: "把应用从预览推进到上线检查",
     icon: Rocket,
-    model: "max",
+    model: "lite",
     prompt: `请帮我准备一个 Web 应用上线方案。
 
 目标：

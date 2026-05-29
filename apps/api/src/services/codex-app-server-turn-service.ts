@@ -7,6 +7,8 @@ import {
   normalizeCodexApiKey,
   normalizeCodexBaseUrl,
   normalizeCodexModel,
+  SANDBOX_LOCAL_LLM_PROXY_API_KEY,
+  SANDBOX_LOCAL_LLM_PROXY_BASE_URL,
 } from '../utils/codex-runtime-config';
 
 type CodexAppServerTurnInput = {
@@ -76,22 +78,17 @@ function toPositiveInt(value: number | undefined, fallback: number): number {
 function normalizeProviderBaseUrl(value: string | undefined): string {
   const trimmed = normalizeCodexBaseUrl(value);
   const withoutTrailingSlash = trimmed.replace(/\/+$/, '');
+  if (withoutTrailingSlash === 'http://127.0.0.1:18111') {
+    return withoutTrailingSlash;
+  }
   return withoutTrailingSlash.endsWith('/v1')
     ? withoutTrailingSlash.slice(0, -3)
     : withoutTrailingSlash;
 }
 
 function buildRuntimeConfig(): CodexAppServerRuntimeConfig {
-  const apiKey = normalizeCodexApiKey(asString(process.env.CODEX_API_KEY) || asString(process.env.OPENAI_API_KEY) || undefined);
-  if (!apiKey) {
-    throw new Error('Codex API Key 未配置');
-  }
-  const baseUrl = normalizeProviderBaseUrl(
-    asString(process.env.CODEX_BASE_URL) ||
-      asString(process.env.OPENAI_BASE_URL) ||
-      asString(process.env.OPENAI_API_BASE) ||
-      undefined
-  );
+  const apiKey = normalizeCodexApiKey(SANDBOX_LOCAL_LLM_PROXY_API_KEY);
+  const baseUrl = normalizeProviderBaseUrl(SANDBOX_LOCAL_LLM_PROXY_BASE_URL);
   const model = normalizeCodexModel(asString(process.env.CODEX_MODEL) || asString(process.env.OPENAI_MODEL) || undefined);
   return {
     apiKey,
@@ -117,34 +114,18 @@ function buildAuthJson(config: CodexAppServerRuntimeConfig): string | null {
 
 function buildChildEnv(): Record<string, string> {
   const envs: Record<string, string> = {};
-  const passthrough = [
-    'OPENAI_API_KEY',
-    'CODEX_API_KEY',
-    'OPENAI_BASE_URL',
-    'OPENAI_API_BASE',
-    'CODEX_BASE_URL',
-    'OPENAI_MODEL',
-    'CODEX_MODEL',
-  ];
+  const passthrough = ['OPENAI_MODEL', 'CODEX_MODEL'];
   for (const key of passthrough) {
     const value = process.env[key];
     if (value && value.trim()) {
       envs[key] = value.trim();
     }
   }
-  if (!envs.CODEX_API_KEY && envs.OPENAI_API_KEY) {
-    envs.CODEX_API_KEY = envs.OPENAI_API_KEY;
-  }
-  if (!envs.OPENAI_API_KEY && envs.CODEX_API_KEY) {
-    envs.OPENAI_API_KEY = envs.CODEX_API_KEY;
-  }
-  if (!envs.CODEX_BASE_URL) {
-    const mirroredBase = envs.OPENAI_BASE_URL || envs.OPENAI_API_BASE || '';
-    if (mirroredBase) envs.CODEX_BASE_URL = mirroredBase;
-  }
-  if (!envs.OPENAI_BASE_URL && envs.CODEX_BASE_URL) {
-    envs.OPENAI_BASE_URL = envs.CODEX_BASE_URL;
-  }
+  envs.OPENAI_API_KEY = SANDBOX_LOCAL_LLM_PROXY_API_KEY;
+  envs.CODEX_API_KEY = SANDBOX_LOCAL_LLM_PROXY_API_KEY;
+  envs.OPENAI_BASE_URL = SANDBOX_LOCAL_LLM_PROXY_BASE_URL;
+  envs.OPENAI_API_BASE = SANDBOX_LOCAL_LLM_PROXY_BASE_URL;
+  envs.CODEX_BASE_URL = SANDBOX_LOCAL_LLM_PROXY_BASE_URL;
   if (!envs.CODEX_MODEL && envs.OPENAI_MODEL) {
     envs.CODEX_MODEL = envs.OPENAI_MODEL;
   }

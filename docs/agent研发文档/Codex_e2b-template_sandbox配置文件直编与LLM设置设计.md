@@ -26,6 +26,8 @@
 
 本设计只覆盖以上目标，不扩展额外能力。
 
+安全补充（2026-05-29）：Codex sandbox 内的 `~/.codex/auth.json` 不允许写入平台 `.env` 中的真实 `CODEX_API_KEY` / `OPENAI_API_KEY`。当前运行时统一写入本地 OSAC LLM proxy 的占位 token，真实上游密钥只保留在 API 进程内。
+
 ## 2. 目标
 
 本轮目标：
@@ -58,6 +60,8 @@
    - `~/.codex/config.toml`
    - `~/.codex/auth.json`
 3. 不再把“环境变量直传”作为用户可感知主配置方式
+4. `auth.json` 只能包含本地代理占位 token，不能包含平台、生产环境或其他用户的真实上游密钥
+5. `config.toml` 的 sandbox 默认 base URL 指向 `http://127.0.0.1:18111`，由 OSAC LLM proxy 通过 WS 回流到 API 进程内的 `/api/llm-proxy`
 
 ### 3.2 用户隔离
 

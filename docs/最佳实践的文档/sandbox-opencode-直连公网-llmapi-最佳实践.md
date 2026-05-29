@@ -3,23 +3,27 @@
 更新时间：2026-02-20  
 适用范围：当前阶段（暂停 OSAC 方案），在 Sandbox 内直接使用 OpenCode 调用公网 LLM API。
 
+状态补充（2026-05-29）：本文记录的是历史直连方案。生产安全口径已切换为 `Sandbox -> OSAC 本地 LLM proxy -> API 进程内 /api/llm-proxy -> 上游`，不再把平台真实 API Key 或直连 base URL 写入用户可控 sandbox。
+
 ## 1. 当前策略（冻结口径）
 
 当前默认策略：
 
-1. 不走 OSAC 执行链路（仅保留代码，后续可恢复）。
-2. Sandbox 内 `opencode` 直接访问公网 OpenAI-compatible 端点。
+1. 历史口径是不走 OSAC 执行链路（仅保留代码）。
+2. 历史口径是 Sandbox 内 `opencode` 直接访问公网 OpenAI-compatible 端点。
+3. 当前生产安全口径禁止继续使用直连公网 API Key 方案。
 
 相关默认开关（编排侧）：
 
 - `OSAC_EXECUTION_ENABLED=false`
-- `OSAC_LLM_PROXY_ENABLE=false`
+- 历史直连：`OSAC_LLM_PROXY_ENABLE=false`
+- 当前安全默认：`OSAC_LLM_PROXY_ENABLE=true`
 
 ### 1.1 配置隔离要求
 
 当平台主链路的 LLM 代理使用了与 Sandbox 直连链路不同的协议口径时，必须为 Sandbox 单独下发配置，不能直接复用平台主链路的协议类型。
 
-当前建议使用以下独立变量：
+历史直连方案曾建议使用以下独立变量：
 
 - `SANDBOX_OPENAI_API_KEY`
 - `SANDBOX_OPENAI_BASE_URL`
@@ -29,8 +33,9 @@
 推荐口径：
 
 1. 主平台链路继续按自身协议接入 `llm-proxy`。
-2. Sandbox/OpenCode 直连链路固定走 OpenAI-compatible。
-3. Sandbox 预检与 `opencode.json` 统一读取 `SANDBOX_OPENAI_*` 映射后的环境变量，避免被平台主链路的 `LLM_PROXY_UPSTREAM_API_TYPE` 误伤。
+2. Sandbox/OpenCode 只消费本地 OpenAI-compatible 代理地址。
+3. Sandbox 预检与 `opencode.json` 统一读取本地 OSAC LLM proxy 映射后的环境变量，避免平台主链路密钥进入 sandbox。
+4. `SANDBOX_OPENAI_API_KEY`、`SANDBOX_ENGINE_*_API_KEY` 不得写入 sandbox env 或配置文件；模型选择可继续使用 `SANDBOX_OPENAI_MODEL` / `SANDBOX_ENGINE_*_MODEL`。
 
 ## 2. 前置条件
 

@@ -2,7 +2,10 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
   buildCodexConfigToml,
+  buildCodexAuthJson,
   ensurePlaywrightMcpInConfigToml,
+  SANDBOX_LOCAL_LLM_PROXY_API_KEY,
+  SANDBOX_LOCAL_LLM_PROXY_BASE_URL,
 } from '../src/utils/codex-runtime-config';
 
 test('codex config uses fixed playwright-mcp command instead of npx lookup', () => {
@@ -27,4 +30,15 @@ test('codex config does not rewrite an existing playwright mcp section', () => {
   ].join('\n');
 
   assert.equal(ensurePlaywrightMcpInConfigToml(source), source);
+});
+
+test('sandbox codex runtime points at local OSAC proxy with placeholder auth', () => {
+  const config = buildCodexConfigToml({
+    baseUrl: SANDBOX_LOCAL_LLM_PROXY_BASE_URL,
+    model: 'gpt-test',
+  });
+  const auth = JSON.parse(buildCodexAuthJson({ apiKey: SANDBOX_LOCAL_LLM_PROXY_API_KEY }));
+
+  assert.match(config, /base_url = "http:\/\/127\.0\.0\.1:18111"/);
+  assert.equal(auth.OPENAI_API_KEY, SANDBOX_LOCAL_LLM_PROXY_API_KEY);
 });

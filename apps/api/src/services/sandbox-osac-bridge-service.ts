@@ -5,6 +5,7 @@ import { writeConnectorDebugLog } from '../utils/connector-debug-log';
 import { platformRuntimeArtifactService } from './platform-runtime-artifact-service';
 
 export type SandboxOsacExecutor = 'opencode' | 'codex' | 'altus';
+export const OSAC_LLM_PROXY_PORT = 18111;
 
 function pickString(value: unknown): string | null {
   if (typeof value === 'string' && value.trim()) return value.trim();
@@ -224,7 +225,8 @@ chmod +x "$target"
     `OSAC_CODEX_DEFAULT_WORKTREE=${shellEscape(workspaceRoot)}`,
     `OSAC_OPENCODE_PATH='opencode'`,
     `OSAC_OPENCODE_DEFAULT_WORKTREE=${shellEscape(workspaceRoot)}`,
-    `OSAC_LLM_PROXY_ENABLE='false'`,
+    `OSAC_LLM_PROXY_ENABLE='true'`,
+    `OSAC_LLM_PROXY_PORT=${shellEscape(String(OSAC_LLM_PROXY_PORT))}`,
   ];
   const startCommand = `
 set -euo pipefail
@@ -334,6 +336,8 @@ export async function canReuseOsacBridge(input: {
   authToken?: string | null;
   currentSha256?: string | null;
   expectedSha256?: string | null;
+  llmProxyEnabled?: unknown;
+  llmProxyPort?: unknown;
 }): Promise<boolean> {
   const endpoint = pickString(input.endpoint);
   const authToken = pickString(input.authToken);
@@ -341,6 +345,16 @@ export async function canReuseOsacBridge(input: {
   const expectedSha256 = pickString(input.expectedSha256);
   if (!endpoint || !authToken) return false;
   if (!currentSha256 || !expectedSha256 || currentSha256 !== expectedSha256) {
+    return false;
+  }
+  const llmProxyPort =
+    typeof input.llmProxyPort === 'number'
+      ? input.llmProxyPort
+      : Number(pickString(input.llmProxyPort));
+  if (input.llmProxyEnabled !== true && input.llmProxyEnabled !== 'true') {
+    return false;
+  }
+  if (llmProxyPort !== OSAC_LLM_PROXY_PORT) {
     return false;
   }
   const statusUrl = endpoint.replace(/^ws/i, 'http').replace(/\/ws$/, '/status');

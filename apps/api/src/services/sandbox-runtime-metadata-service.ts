@@ -6,6 +6,7 @@ import { resolveOpencodeStatePath, resolveOpencodeWorkspacePath } from '../utils
 import {
   canReuseOsacBridge,
   ensureOsacBridge,
+  OSAC_LLM_PROXY_PORT,
   waitForOsacBridgeReady,
   type SandboxOsacExecutor,
 } from './sandbox-osac-bridge-service';
@@ -150,6 +151,8 @@ export async function ensureSandboxRuntimeMetadata(
           authToken: osacAuthToken,
           currentSha256: currentOsacSha256,
           expectedSha256: expectedOsacSpec.sha256,
+          llmProxyEnabled: metadata.osacLlmProxyEnabled,
+          llmProxyPort: Number(metadata.osacLlmProxyPort) || null,
         });
     writeConnectorDebugLog('[SANDBOX_RUNTIME_METADATA_BRIDGE_CHECK]', {
       orchestratorSessionId,
@@ -170,6 +173,9 @@ export async function ensureSandboxRuntimeMetadata(
       }
       if (!osacConnectionMode) {
         osacConnectionMode = 'direct';
+        needsMetadataUpdate = true;
+      }
+      if (metadata.osacLlmProxyEnabled !== true || Number(metadata.osacLlmProxyPort) !== OSAC_LLM_PROXY_PORT) {
         needsMetadataUpdate = true;
       }
       if (asText(metadata.osacAuthToken) !== osacAuthToken && osacAuthToken) {
@@ -197,6 +203,8 @@ export async function ensureSandboxRuntimeMetadata(
       metadata.osacBinaryVersion = bridge.osacVersion;
       metadata.osacBinarySha256 = bridge.osacSha256;
       metadata.osacBinaryObjectKey = bridge.osacObjectKey;
+      metadata.osacLlmProxyEnabled = true;
+      metadata.osacLlmProxyPort = OSAC_LLM_PROXY_PORT;
       needsMetadataUpdate = true;
       try {
         await waitForOsacBridgeReady({
@@ -239,6 +247,8 @@ export async function ensureSandboxRuntimeMetadata(
         osacHostPort: osacHostPort || undefined,
         osacConnectionMode: osacConnectionMode || undefined,
         osacAuthToken: osacAuthToken || undefined,
+        osacLlmProxyEnabled: true,
+        osacLlmProxyPort: OSAC_LLM_PROXY_PORT,
         e2b: {
           ...e2bMeta,
           sandboxId: asText(e2bMeta.sandboxId) || orchestratorSessionId,

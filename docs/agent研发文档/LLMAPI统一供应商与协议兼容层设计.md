@@ -4,6 +4,8 @@
 状态：待审核  
 适用范围：`apps/api`、E2B sandbox/OpenCode provision、平台统一 LLM 上游配置
 
+更新补充（2026-05-29）：Sandbox 内 Codex/OpenCode 不再直接接收平台 `.env` 中的真实上游 API Key。用户可控 sandbox 统一写入本地 OSAC LLM proxy（`http://127.0.0.1:18111/v1`）和无权限占位 token；真实 `LLM_PROXY_UPSTREAM_*` 只留在 API 进程内，由 OSAC WS 桥接转发。
+
 ## 1. 背景与问题
 
 当前平台内同时存在多种与 LLM 上游相关的配置口径：
@@ -69,9 +71,16 @@
 
 1. 通过环境变量生成 `opencode.json`
 2. 统一按 `@ai-sdk/openai-compatible` 提供 provider
-3. `OPENAI_BASE_URL` / `OPENAI_API_KEY` 会下发到 sandbox
+3. sandbox 内 `OPENAI_BASE_URL` / `OPENAI_API_KEY` 只指向本地 OSAC LLM proxy 与占位 token，不下发平台真实密钥
 
 结论：OpenCode 仍然消费 OpenAI-compatible，因此平台若选择 Anthropic 上游，转换应发生在平台代理层，而不是要求 OpenCode 直接改为 Anthropic SDK。
+
+安全约束：
+
+1. 禁止把 `OPENAI_API_KEY`、`CODEX_API_KEY`、`OPENCODE_API_KEY`、`ANTHROPIC_API_KEY`、`GEMINI_API_KEY` 从 API 进程环境透传进 sandbox。
+2. 禁止把 `SANDBOX_OPENAI_API_KEY` 或 `SANDBOX_ENGINE_*_API_KEY` 写入用户可读的 sandbox env、`~/.codex/auth.json`、`~/.config/opencode/opencode.json`。
+3. `SANDBOX_ENGINE_*_MODEL` 仍可用于选择模型；密钥与上游 base URL 由 API 进程内代理统一持有。
+4. `/api/llm-proxy` 只接受 loopback 请求，OSAC 桥接在 API 进程内调用该路由，避免公网把它当开放代理使用。
 
 ### 3.3 当前 `.env` 现状
 

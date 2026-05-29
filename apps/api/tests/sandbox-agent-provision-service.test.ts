@@ -5,10 +5,38 @@ import {
   __sandboxAgentProvisionInternalsForTest,
   sandboxAgentProvisionService,
 } from '../src/services/sandbox-agent-provision-service';
+import {
+  SANDBOX_LOCAL_LLM_PROXY_API_KEY,
+  SANDBOX_LOCAL_LLM_PROXY_BASE_URL,
+} from '../src/utils/codex-runtime-config';
 
 afterEach(() => {
   mock.reset();
 });
+
+function withProcessEnv(values: Record<string, string | undefined>, fn: () => void) {
+  const previous = new Map<string, string | undefined>();
+  for (const key of Object.keys(values)) {
+    previous.set(key, process.env[key]);
+    const next = values[key];
+    if (next === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = next;
+    }
+  }
+  try {
+    fn();
+  } finally {
+    for (const [key, value] of previous) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+}
 
 test('provisionWithLock shares in-flight work only for the same executor surface', async () => {
   let release!: () => void;
@@ -100,6 +128,48 @@ test('opencode config uses fixed sandbox browser dependency paths', () => {
     'http://127.0.0.1:9222',
   ]);
   assert.doesNotMatch(JSON.stringify(config.mcp.playwright.command), /npx|@playwright\/mcp@latest/);
+});
+
+test('sandbox env never exposes host LLM secrets to user-controlled sandboxes', () => {
+  withProcessEnv(
+    {
+      OPENAI_API_KEY: 'host-openai-secret',
+      CODEX_API_KEY: 'host-codex-secret',
+      OPENCODE_API_KEY: 'host-opencode-secret',
+      ANTHROPIC_API_KEY: 'host-anthropic-secret',
+      GEMINI_API_KEY: 'host-gemini-secret',
+      SANDBOX_OPENAI_API_KEY: 'legacy-sandbox-secret',
+      SANDBOX_OPENAI_BASE_URL: 'https://legacy-sandbox.example/v1',
+      SANDBOX_ENGINE_OPENCODE_API_KEY: 'engine-opencode-secret',
+      SANDBOX_ENGINE_OPENCODE_BASE_URL: 'https://engine-opencode.example/v1',
+      SANDBOX_ENGINE_CODEX_API_KEY: 'engine-codex-secret',
+      SANDBOX_ENGINE_CODEX_BASE_URL: 'https://engine-codex.example/v1',
+    },
+    () => {
+      for (const executor of ['opencode', 'codex'] as const) {
+        const env = __sandboxAgentProvisionInternalsForTest.buildSandboxEnv(executor);
+        assert.equal(env.OPENAI_API_KEY, SANDBOX_LOCAL_LLM_PROXY_API_KEY);
+        assert.equal(env.CODEX_API_KEY, SANDBOX_LOCAL_LLM_PROXY_API_KEY);
+        assert.equal(env.OPENCODE_API_KEY, SANDBOX_LOCAL_LLM_PROXY_API_KEY);
+        assert.equal(env.OPENAI_BASE_URL, SANDBOX_LOCAL_LLM_PROXY_BASE_URL);
+        assert.equal(env.OPENAI_API_BASE, SANDBOX_LOCAL_LLM_PROXY_BASE_URL);
+        assert.equal(env.CODEX_BASE_URL, SANDBOX_LOCAL_LLM_PROXY_BASE_URL);
+        assert.equal(env.OPENCODE_BASE_URL, SANDBOX_LOCAL_LLM_PROXY_BASE_URL);
+        assert.equal(env.LLM_PROXY_UPSTREAM_API_TYPE, 'openai');
+        assert.equal(env.ANTHROPIC_API_KEY, undefined);
+        assert.equal(env.GEMINI_API_KEY, undefined);
+        assert.doesNotMatch(JSON.stringify(env), /host-|legacy-sandbox-secret|engine-/);
+      }
+    }
+  );
+});
+
+test('opencode config writes only local proxy credential placeholders', () => {
+  const env = __sandboxAgentProvisionInternalsForTest.buildSandboxEnv('opencode');
+  const config = JSON.parse(__sandboxAgentProvisionInternalsForTest.buildOpencodeConfig(env));
+
+  assert.equal(config.provider.openai.options.baseURL, SANDBOX_LOCAL_LLM_PROXY_BASE_URL);
+  assert.equal(config.provider.openai.options.apiKey, SANDBOX_LOCAL_LLM_PROXY_API_KEY);
 });
 
 test('sandbox verify script checks fixed browser toolchain locations', () => {

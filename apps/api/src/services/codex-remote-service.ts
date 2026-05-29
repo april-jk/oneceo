@@ -16,7 +16,8 @@ import {
   buildCodexAuthJson,
   buildCodexConfigToml,
   DEFAULT_CODEX_MODEL,
-  DEFAULT_SANDBOX_OPENAI_BASE_URL,
+  SANDBOX_LOCAL_LLM_PROXY_API_KEY,
+  SANDBOX_LOCAL_LLM_PROXY_BASE_URL,
 } from '../utils/codex-runtime-config';
 import {
   extractAppServerErrorMessage,
@@ -1193,20 +1194,6 @@ fi
         process.env.CODEX_MODEL ||
         process.env.OPENAI_MODEL ||
         DEFAULT_CODEX_MODEL;
-      const codexBaseUrl =
-        process.env.SANDBOX_ENGINE_CODEX_BASE_URL ||
-        process.env.CODEX_BASE_URL ||
-        process.env.OPENAI_BASE_URL ||
-        process.env.OPENAI_API_BASE ||
-        DEFAULT_SANDBOX_OPENAI_BASE_URL;
-      const codexApiKey =
-        process.env.SANDBOX_ENGINE_CODEX_API_KEY ||
-        process.env.CODEX_API_KEY ||
-        process.env.OPENAI_API_KEY ||
-        '';
-      if (!codexApiKey.trim()) {
-        throw new Error('Codex API Key 未配置');
-      }
       this.clearAppServerJob(taskSessionId);
       const turnJob = await codexAppServerTurnService.startBackgroundTurn({
         sessionId: runtime.orchestratorSessionId,
@@ -1216,8 +1203,8 @@ fi
         waitTimeoutMs: resolveCodexAppServerWaitTimeoutMs(),
         model: codexModel,
         codexBinaryPath: runtime.codexBinaryPath || undefined,
-        configToml: buildCodexConfigToml({ baseUrl: codexBaseUrl, model: codexModel }),
-        authJson: buildCodexAuthJson({ apiKey: codexApiKey }),
+        configToml: buildCodexConfigToml({ baseUrl: SANDBOX_LOCAL_LLM_PROXY_BASE_URL, model: codexModel }),
+        authJson: buildCodexAuthJson({ apiKey: SANDBOX_LOCAL_LLM_PROXY_API_KEY }),
       });
       if (!turnJob.threadId) {
         throw new Error('Codex App Server 未返回 threadId');

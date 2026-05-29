@@ -31,7 +31,8 @@ import {
   buildCodexAuthJson,
   buildCodexConfigToml,
   DEFAULT_CODEX_MODEL,
-  DEFAULT_SANDBOX_OPENAI_BASE_URL,
+  SANDBOX_LOCAL_LLM_PROXY_API_KEY,
+  SANDBOX_LOCAL_LLM_PROXY_BASE_URL,
 } from '../utils/codex-runtime-config';
 import {
   connectorRegistry,
@@ -42,6 +43,7 @@ import { connectorStorageBootstrap } from './connector-storage-bootstrap';
 import {
   canReuseOsacBridge,
   ensureOsacBridge,
+  OSAC_LLM_PROXY_PORT,
   waitForOsacBridgeReady,
 } from './sandbox-osac-bridge-service';
 import { writeConnectorDebugLog } from '../utils/connector-debug-log';
@@ -375,115 +377,40 @@ async function markSandboxClosedBestEffort(sessionId: string, reason: string) {
 
 function buildSandboxEnv(executor: ProvisionExecutor = 'opencode'): Record<string, string> {
   const env: Record<string, string> = {};
-  const passthrough = [
-    'OPENAI_API_KEY',
-    'CODEX_API_KEY',
-    'OPENAI_BASE_URL',
-    'OPENAI_API_BASE',
-    'LLM_PROXY_UPSTREAM_API_TYPE',
-    'OPENAI_MODEL',
-    'CODEX_BASE_URL',
-    'CODEX_MODEL',
-    'ANTHROPIC_API_KEY',
-    'GEMINI_API_KEY',
-    'OPENCODE_API_KEY',
-    'OPENCODE_BASE_URL',
-    'OPENCODE_MODEL',
-    'OPENCODE_SERVER_PASSWORD',
-  ];
+  const passthrough = ['OPENAI_MODEL', 'CODEX_MODEL', 'OPENCODE_MODEL'];
   for (const key of passthrough) {
     const value = process.env[key];
     if (value && value.trim()) {
       env[key] = value.trim();
     }
   }
-  const sandboxApiKey = pickString(process.env.SANDBOX_OPENAI_API_KEY);
-  const sandboxBaseUrl =
-    pickString(process.env.SANDBOX_OPENAI_BASE_URL) || pickString(process.env.SANDBOX_OPENAI_API_BASE);
   const sandboxModel = pickString(process.env.SANDBOX_OPENAI_MODEL);
-  const sandboxApiType = pickString(process.env.SANDBOX_OPENAI_API_TYPE)?.toLowerCase() || null;
-  const sandboxOverrideEnabled = Boolean(sandboxApiKey || sandboxBaseUrl || sandboxModel || sandboxApiType);
+  const sandboxOverrideEnabled = Boolean(sandboxModel);
 
-  if (sandboxApiKey) {
-    env.OPENAI_API_KEY = sandboxApiKey;
-    env.CODEX_API_KEY = sandboxApiKey;
-    env.OPENCODE_API_KEY = sandboxApiKey;
-  }
-  if (sandboxBaseUrl) {
-    env.OPENAI_BASE_URL = sandboxBaseUrl;
-    env.OPENAI_API_BASE = sandboxBaseUrl;
-    env.CODEX_BASE_URL = sandboxBaseUrl;
-    env.OPENCODE_BASE_URL = sandboxBaseUrl;
-  }
   if (sandboxModel) {
     env.OPENAI_MODEL = sandboxModel;
     env.CODEX_MODEL = sandboxModel;
     env.OPENCODE_MODEL = sandboxModel;
-  }
-  if (sandboxApiType) {
-    env.LLM_PROXY_UPSTREAM_API_TYPE = sandboxApiType;
   }
   if (sandboxOverrideEnabled) {
     env.OPENCODE_PROVIDER_ID = 'openai';
   }
 
   const engineSuffix = executor.toUpperCase();
-  const engineApiKey = pickString(process.env[`SANDBOX_ENGINE_${engineSuffix}_API_KEY`]);
-  const engineBaseUrl = pickString(process.env[`SANDBOX_ENGINE_${engineSuffix}_BASE_URL`]);
   const engineModel = pickString(process.env[`SANDBOX_ENGINE_${engineSuffix}_MODEL`]);
-  const engineApiType = pickString(process.env[`SANDBOX_ENGINE_${engineSuffix}_API_TYPE`])?.toLowerCase() || null;
-  if (engineApiKey) {
-    env.OPENAI_API_KEY = engineApiKey;
-    env.CODEX_API_KEY = engineApiKey;
-    env.OPENCODE_API_KEY = engineApiKey;
-    env.ANTHROPIC_API_KEY = engineApiKey;
-  }
-  if (engineBaseUrl) {
-    env.OPENAI_BASE_URL = engineBaseUrl;
-    env.OPENAI_API_BASE = engineBaseUrl;
-    env.CODEX_BASE_URL = engineBaseUrl;
-    env.OPENCODE_BASE_URL = engineBaseUrl;
-    env.ANTHROPIC_BASE_URL = engineBaseUrl;
-  }
   if (engineModel) {
     env.OPENAI_MODEL = engineModel;
     env.CODEX_MODEL = engineModel;
     env.OPENCODE_MODEL = engineModel;
-    env.ANTHROPIC_MODEL = engineModel;
   }
-  if (engineApiType) {
-    env.LLM_PROXY_UPSTREAM_API_TYPE = engineApiType;
-  }
-  if (!env.CODEX_API_KEY && env.OPENAI_API_KEY) {
-    env.CODEX_API_KEY = env.OPENAI_API_KEY;
-  }
-  if (!env.OPENAI_API_KEY && env.CODEX_API_KEY) {
-    env.OPENAI_API_KEY = env.CODEX_API_KEY;
-  }
-  if (!env.OPENAI_BASE_URL) {
-    if (env.CODEX_BASE_URL) {
-      env.OPENAI_BASE_URL = env.CODEX_BASE_URL;
-    } else if (env.OPENCODE_BASE_URL) {
-      env.OPENAI_BASE_URL = env.OPENCODE_BASE_URL;
-    } else if (env.OPENAI_API_BASE) {
-      env.OPENAI_BASE_URL = env.OPENAI_API_BASE;
-    }
-  }
-  if (!env.OPENAI_BASE_URL) {
-    env.OPENAI_BASE_URL = DEFAULT_SANDBOX_OPENAI_BASE_URL;
-  }
-  if (!env.OPENAI_API_BASE && env.OPENAI_BASE_URL) {
-    env.OPENAI_API_BASE = env.OPENAI_BASE_URL;
-  }
-  if (!env.CODEX_BASE_URL) {
-    const mirroredBase = env.OPENAI_BASE_URL || env.OPENAI_API_BASE || env.OPENCODE_BASE_URL || '';
-    if (mirroredBase) {
-      env.CODEX_BASE_URL = mirroredBase;
-    }
-  }
-  if (!env.OPENCODE_BASE_URL) {
-    env.OPENCODE_BASE_URL = env.OPENAI_BASE_URL || DEFAULT_SANDBOX_OPENAI_BASE_URL;
-  }
+  env.OPENAI_API_KEY = SANDBOX_LOCAL_LLM_PROXY_API_KEY;
+  env.CODEX_API_KEY = SANDBOX_LOCAL_LLM_PROXY_API_KEY;
+  env.OPENCODE_API_KEY = SANDBOX_LOCAL_LLM_PROXY_API_KEY;
+  env.OPENAI_BASE_URL = SANDBOX_LOCAL_LLM_PROXY_BASE_URL;
+  env.OPENAI_API_BASE = SANDBOX_LOCAL_LLM_PROXY_BASE_URL;
+  env.CODEX_BASE_URL = SANDBOX_LOCAL_LLM_PROXY_BASE_URL;
+  env.OPENCODE_BASE_URL = SANDBOX_LOCAL_LLM_PROXY_BASE_URL;
+  env.LLM_PROXY_UPSTREAM_API_TYPE = 'openai';
   if (!env.OPENAI_MODEL) {
     const mirroredModel =
       env.CODEX_MODEL || env.OPENCODE_MODEL || (process.env.AGENT_OPENAI_MODEL || '').trim() || DEFAULT_CODEX_MODEL;
@@ -1519,6 +1446,9 @@ export class SandboxAgentProvisionService {
         let osacBinaryVersion: string | null = pickString(existingMetadata.osacBinaryVersion);
         let osacBinarySha256: string | null = pickString(existingMetadata.osacBinarySha256);
         let osacBinaryObjectKey: string | null = pickString(existingMetadata.osacBinaryObjectKey);
+        let osacLlmProxyEnabled =
+          existingMetadata.osacLlmProxyEnabled === true || existingMetadata.osacLlmProxyEnabled === 'true';
+        let osacLlmProxyPort: number | null = Number(existingMetadata.osacLlmProxyPort) || null;
         const expectedOsacSpec = await runStep('osac_artifact_spec', () =>
           platformRuntimeArtifactService.getPublishedOsacDownloadSpec()
         );
@@ -1554,6 +1484,8 @@ export class SandboxAgentProvisionService {
             authToken: osacAuthToken,
             currentSha256: osacBinarySha256,
             expectedSha256: expectedOsacSpec.sha256,
+            llmProxyEnabled: osacLlmProxyEnabled,
+            llmProxyPort: osacLlmProxyPort,
           });
           if (reusableBridge) {
             osacHostPort =
@@ -1575,6 +1507,8 @@ export class SandboxAgentProvisionService {
             osacBinaryVersion = bridge.osacVersion;
             osacBinarySha256 = bridge.osacSha256;
             osacBinaryObjectKey = bridge.osacObjectKey;
+            osacLlmProxyEnabled = true;
+            osacLlmProxyPort = OSAC_LLM_PROXY_PORT;
             await runStep('osac_ready', () =>
               waitForOsacBridgeReady({
                 endpoint: bridge.osacEndpoint,
@@ -1598,7 +1532,7 @@ export class SandboxAgentProvisionService {
           codexArchiveHome = codexHomeMapping.codexArchiveHome;
           codexDotCodexPath = codexHomeMapping.codexDotCodexPath;
           codexConfigToml = buildCodexConfigToml({
-            baseUrl: envInput.CODEX_BASE_URL || envInput.OPENAI_BASE_URL || DEFAULT_SANDBOX_OPENAI_BASE_URL,
+            baseUrl: envInput.CODEX_BASE_URL || envInput.OPENAI_BASE_URL || SANDBOX_LOCAL_LLM_PROXY_BASE_URL,
             model: envInput.CODEX_MODEL || envInput.OPENAI_MODEL || DEFAULT_CODEX_MODEL,
           });
           codexAuthJson = buildCodexAuthJson({
@@ -1616,6 +1550,8 @@ export class SandboxAgentProvisionService {
             authToken: osacAuthToken,
             currentSha256: osacBinarySha256,
             expectedSha256: expectedOsacSpec.sha256,
+            llmProxyEnabled: osacLlmProxyEnabled,
+            llmProxyPort: osacLlmProxyPort,
           });
           if (reusableBridge) {
             osacHostPort =
@@ -1638,6 +1574,8 @@ export class SandboxAgentProvisionService {
             osacBinaryVersion = bridge.osacVersion;
             osacBinarySha256 = bridge.osacSha256;
             osacBinaryObjectKey = bridge.osacObjectKey;
+            osacLlmProxyEnabled = true;
+            osacLlmProxyPort = OSAC_LLM_PROXY_PORT;
             await runStep('osac_ready', () =>
               waitForOsacBridgeReady({
                 endpoint: bridge.osacEndpoint,
@@ -1651,6 +1589,8 @@ export class SandboxAgentProvisionService {
             authToken: osacAuthToken,
             currentSha256: osacBinarySha256,
             expectedSha256: expectedOsacSpec.sha256,
+            llmProxyEnabled: osacLlmProxyEnabled,
+            llmProxyPort: osacLlmProxyPort,
           });
           if (reusableBridge) {
             osacHostPort =
@@ -1672,6 +1612,8 @@ export class SandboxAgentProvisionService {
             osacBinaryVersion = bridge.osacVersion;
             osacBinarySha256 = bridge.osacSha256;
             osacBinaryObjectKey = bridge.osacObjectKey;
+            osacLlmProxyEnabled = true;
+            osacLlmProxyPort = OSAC_LLM_PROXY_PORT;
             await runStep('osac_ready', () =>
               waitForOsacBridgeReady({
                 endpoint: bridge.osacEndpoint,
@@ -1720,6 +1662,8 @@ export class SandboxAgentProvisionService {
           osacBinaryVersion: osacBinaryVersion || undefined,
           osacBinarySha256: osacBinarySha256 || undefined,
           osacBinaryObjectKey: osacBinaryObjectKey || undefined,
+          osacLlmProxyEnabled,
+          osacLlmProxyPort: osacLlmProxyPort || undefined,
           e2b: {
             ...(existingEnvironment?.metadata as any)?.e2b,
             sandboxId: sessionId,
@@ -1824,6 +1768,7 @@ export class SandboxAgentProvisionService {
 export const sandboxAgentProvisionService = new SandboxAgentProvisionService();
 
 export const __sandboxAgentProvisionInternalsForTest = {
+  buildSandboxEnv,
   buildOpencodeConfig,
   buildSandboxVerifyScript,
   isSandboxControlPlaneTransientError,

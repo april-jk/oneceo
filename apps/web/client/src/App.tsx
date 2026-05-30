@@ -8,6 +8,7 @@ import { RequireUserAuth } from "./components/RequireUserAuth";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import { AuthProvider } from "./contexts/AuthContext";
 import { GlobalSettingsDialogHost } from "./components/SettingsDialog";
+import { RouteSeo } from "./components/RouteSeo";
 
 import HomePage from "./pages/HomePage";
 import Home from "./pages/Home";
@@ -84,6 +85,7 @@ function App() {
         <ThemeProvider defaultTheme="light" switchable>
           <TooltipProvider>
             <Toaster />
+            <RouteSeo />
             <Router />
             <GlobalSettingsDialogHost />
           </TooltipProvider>

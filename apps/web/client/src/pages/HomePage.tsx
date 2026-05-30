@@ -86,9 +86,24 @@ export default function HomePage() {
   const { status } = useAuth();
   const [message, setMessage] = useState("");
   const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
-  const [selectedModel, setSelectedModel] =
-    useState<AgentModelTier>(DEFAULT_AGENT_MODEL_TIER);
-  const quickActionRows = t("homePage.quickActions", { returnObjects: true }) as string[][];
+  const [selectedModel, setSelectedModel] = useState<AgentModelTier>(
+    DEFAULT_AGENT_MODEL_TIER,
+  );
+  const quickActionRows = t("homePage.quickActions", {
+    returnObjects: true,
+  }) as string[][];
+  const controlPillars = t("homePage.controlPillars", {
+    returnObjects: true,
+  }) as Array<{ title: string; description: string }>;
+  const useCases = t("homePage.useCases", {
+    returnObjects: true,
+  }) as Array<{ title: string; description: string }>;
+  const workflowSteps = t("homePage.workflowSteps", {
+    returnObjects: true,
+  }) as Array<{ title: string; description: string }>;
+  const faqItems = t("homePage.faqItems", {
+    returnObjects: true,
+  }) as Array<{ question: string; answer: string }>;
 
   useEffect(() => {
     if (status === "authenticated") {
@@ -101,7 +116,8 @@ export default function HomePage() {
   }
 
   const goToNewTask = (input: string) => {
-    const value = input.trim() || (attachments.length ? DEFAULT_ATTACHMENT_PROMPT : "");
+    const value =
+      input.trim() || (attachments.length ? DEFAULT_ATTACHMENT_PROMPT : "");
     if (!value) return;
     stashPendingDraftAttachments(attachments);
     setLocation(`/new-task?q=${encodeURIComponent(value)}`);
@@ -128,8 +144,12 @@ export default function HomePage() {
           <div className="flex items-center gap-3">
             <img src="/logo.png" alt="oneceo" className="w-9 h-9 rounded-lg" />
             <div className="flex flex-col">
-              <span className="text-sm font-semibold text-foreground leading-tight">oneceo</span>
-              <span className="text-xs text-muted-foreground leading-tight">{t("homePage.platformSubtitle")}</span>
+              <span className="text-sm font-semibold text-foreground leading-tight">
+                oneceo
+              </span>
+              <span className="text-xs text-muted-foreground leading-tight">
+                {t("homePage.platformSubtitle")}
+              </span>
             </div>
           </div>
           <div className="flex items-center gap-4">
@@ -144,25 +164,30 @@ export default function HomePage() {
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.4, ease: "easeOut" }}
-          className="w-full max-w-3xl space-y-7"
+          className="w-full max-w-6xl space-y-8"
         >
-          <div className="text-center space-y-3">
+          <div className="text-center space-y-4">
+            <span className="inline-flex items-center rounded-full border border-border/80 bg-card/90 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+              {t("homePage.eyebrow")}
+            </span>
             <motion.div
               initial={{ scale: 0.9, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               transition={{ delay: 0.1, duration: 0.4 }}
-              className="flex items-center justify-center gap-3"
+              className="flex items-center justify-center gap-3 flex-wrap"
             >
               <div className="w-12 h-12 bg-foreground rounded-xl flex items-center justify-center shadow-[0_14px_30px_rgba(15,35,65,0.16)]">
                 <span className="text-background font-bold text-xl">M</span>
               </div>
-              <h1 className="text-3xl font-bold text-foreground">{t("homePage.title")}</h1>
+              <h1 className="max-w-4xl text-3xl font-bold tracking-[-0.03em] text-foreground sm:text-4xl">
+                {t("homePage.title")}
+              </h1>
             </motion.div>
             <motion.p
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               transition={{ delay: 0.2, duration: 0.4 }}
-              className="text-muted-foreground text-lg leading-7"
+              className="mx-auto max-w-3xl text-muted-foreground text-lg leading-7"
             >
               {t("homePage.subtitle")}
             </motion.p>
@@ -189,7 +214,10 @@ export default function HomePage() {
                 rows={4}
               />
 
-              <AttachmentChipList attachments={attachments} onRemove={removeAttachment} />
+              <AttachmentChipList
+                attachments={attachments}
+                onRemove={removeAttachment}
+              />
 
               <TooltipProvider>
                 <div className="flex items-center justify-between pt-2">
@@ -205,13 +233,21 @@ export default function HomePage() {
                       <Tooltip>
                         <TooltipTrigger asChild>
                           <DropdownMenuTrigger asChild>
-                            <Button variant="ghost" size="sm" className="h-9 px-3 rounded-lg gap-2 hover:bg-muted">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-9 px-3 rounded-lg gap-2 hover:bg-muted"
+                            >
                               <Sparkles className="w-4 h-4 text-muted-foreground" />
-                              <span className="text-sm text-muted-foreground">{t(`homePage.models.${selectedModel}`)}</span>
+                              <span className="text-sm text-muted-foreground">
+                                {t(`homePage.models.${selectedModel}`)}
+                              </span>
                             </Button>
                           </DropdownMenuTrigger>
                         </TooltipTrigger>
-                        <TooltipContent><p>{t("homePage.selectModel")}</p></TooltipContent>
+                        <TooltipContent>
+                          <p>{t("homePage.selectModel")}</p>
+                        </TooltipContent>
                       </Tooltip>
                       <DropdownMenuContent align="start" className="w-40">
                         {AVAILABLE_AGENT_MODEL_TIERS.map((tier) => (
@@ -231,11 +267,17 @@ export default function HomePage() {
                   <div className="flex items-center gap-1">
                     <Tooltip>
                       <TooltipTrigger asChild>
-                        <Button variant="ghost" size="icon" className="h-9 w-9 rounded-lg hover:bg-muted">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-9 w-9 rounded-lg hover:bg-muted"
+                        >
                           <Mic className="w-4 h-4 text-muted-foreground" />
                         </Button>
                       </TooltipTrigger>
-                      <TooltipContent><p>{t("homePage.voiceInput")}</p></TooltipContent>
+                      <TooltipContent>
+                        <p>{t("homePage.voiceInput")}</p>
+                      </TooltipContent>
                     </Tooltip>
 
                     <Tooltip>
@@ -251,7 +293,9 @@ export default function HomePage() {
                           <Send className="w-4 h-4" />
                         </Button>
                       </TooltipTrigger>
-                      <TooltipContent><p>{t("homePage.sendMessage")}</p></TooltipContent>
+                      <TooltipContent>
+                        <p>{t("homePage.sendMessage")}</p>
+                      </TooltipContent>
                     </Tooltip>
                   </div>
                 </div>
@@ -259,12 +303,12 @@ export default function HomePage() {
             </div>
           </motion.div>
 
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ delay: 0.4, duration: 0.4 }}
-          className="pt-3 space-y-3"
-        >
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ delay: 0.4, duration: 0.4 }}
+            className="pt-3 space-y-3"
+          >
             <QuickActionRow
               actions={quickActionRows[0] || []}
               direction="left"
@@ -284,6 +328,109 @@ export default function HomePage() {
               onSelect={goToNewTask}
             />
           </motion.div>
+
+          <section
+            className="grid gap-4 md:grid-cols-3"
+            aria-label={t("homePage.pillarsAriaLabel")}
+          >
+            {controlPillars.map((item) => (
+              <article
+                key={item.title}
+                className="rounded-2xl border border-border/80 bg-card/92 p-5 shadow-[0_12px_28px_rgba(15,35,65,0.06)]"
+              >
+                <h2 className="text-base font-semibold text-foreground">
+                  {item.title}
+                </h2>
+                <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                  {item.description}
+                </p>
+              </article>
+            ))}
+          </section>
+
+          <section className="grid gap-6 rounded-[1.4rem] border border-border/80 bg-card/94 p-6 shadow-[0_16px_36px_rgba(15,35,65,0.06)] lg:grid-cols-[1.2fr_0.8fr]">
+            <div className="space-y-4">
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+                {t("homePage.workflowEyebrow")}
+              </p>
+              <h2 className="text-2xl font-semibold tracking-[-0.02em] text-foreground">
+                {t("homePage.workflowTitle")}
+              </h2>
+              <p className="max-w-2xl text-sm leading-6 text-muted-foreground">
+                {t("homePage.workflowSubtitle")}
+              </p>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              {workflowSteps.map((item, index) => (
+                <article
+                  key={item.title}
+                  className="rounded-2xl border border-border/80 bg-background/90 p-4"
+                >
+                  <p className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+                    {t("homePage.stepLabel", { index: index + 1 })}
+                  </p>
+                  <h3 className="mt-2 text-sm font-semibold text-foreground">
+                    {item.title}
+                  </h3>
+                  <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                    {item.description}
+                  </p>
+                </article>
+              ))}
+            </div>
+          </section>
+
+          <section className="space-y-4">
+            <div className="space-y-2">
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+                {t("homePage.useCasesEyebrow")}
+              </p>
+              <h2 className="text-2xl font-semibold tracking-[-0.02em] text-foreground">
+                {t("homePage.useCasesTitle")}
+              </h2>
+            </div>
+            <div className="grid gap-4 lg:grid-cols-3">
+              {useCases.map((item) => (
+                <article
+                  key={item.title}
+                  className="rounded-2xl border border-border/80 bg-card/92 p-5 shadow-[0_12px_28px_rgba(15,35,65,0.06)]"
+                >
+                  <h3 className="text-base font-semibold text-foreground">
+                    {item.title}
+                  </h3>
+                  <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                    {item.description}
+                  </p>
+                </article>
+              ))}
+            </div>
+          </section>
+
+          <section className="space-y-4 pb-6">
+            <div className="space-y-2">
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+                {t("homePage.faqEyebrow")}
+              </p>
+              <h2 className="text-2xl font-semibold tracking-[-0.02em] text-foreground">
+                {t("homePage.faqTitle")}
+              </h2>
+            </div>
+            <div className="grid gap-4">
+              {faqItems.map((item) => (
+                <article
+                  key={item.question}
+                  className="rounded-2xl border border-border/80 bg-card/92 p-5 shadow-[0_10px_20px_rgba(15,35,65,0.05)]"
+                >
+                  <h3 className="text-base font-semibold text-foreground">
+                    {item.question}
+                  </h3>
+                  <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                    {item.answer}
+                  </p>
+                </article>
+              ))}
+            </div>
+          </section>
         </motion.div>
       </div>
     </div>

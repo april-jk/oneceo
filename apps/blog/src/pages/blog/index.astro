@@ -1,0 +1,27 @@
+---
+import { getCollection } from "astro:content";
+import BaseLayout from "../../layouts/BaseLayout.astro";
+
+const posts = (await getCollection("blog", ({ data }) => !data.draft)).sort(
+  (a, b) => b.data.pubDate.getTime() - a.data.pubDate.getTime(),
+);
+---
+
+<BaseLayout
+  title="All posts | oneceo blog"
+  description="Published posts on the oneceo blog."
+>
+  <section class="card" style="padding: 28px;">
+    <h1 style="margin-top: 0;">All posts</h1>
+    <ul style="list-style: none; margin: 0; padding: 0;">
+      {posts.map((post) => (
+        <li style="padding: 18px 0; border-top: 1px solid var(--line);">
+          <a href={`/blog/${post.id}/`} style="font-size: 20px; font-weight: 700;">
+            {post.data.title}
+          </a>
+          <p style="margin: 8px 0 0; color: var(--muted);">{post.data.description}</p>
+        </li>
+      ))}
+    </ul>
+  </section>
+</BaseLayout>

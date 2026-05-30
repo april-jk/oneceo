@@ -1,0 +1,132 @@
+---
+export interface Props {
+  title: string;
+  description: string;
+  canonical?: string;
+  image?: string;
+  ogType?: "website" | "article";
+}
+
+const {
+  title,
+  description,
+  canonical = Astro.url.href,
+  image = new URL("/og-default.svg", Astro.site).toString(),
+  ogType = "website",
+} = Astro.props;
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>{title}</title>
+    <meta name="description" content={description} />
+    <link rel="canonical" href={canonical} />
+    <meta property="og:type" content={ogType} />
+    <meta property="og:site_name" content="oneceo blog" />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    <meta property="og:url" content={canonical} />
+    <meta property="og:image" content={image} />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content={title} />
+    <meta name="twitter:description" content={description} />
+    <meta name="twitter:image" content={image} />
+    <meta name="theme-color" content="#0969da" />
+    <slot name="head" />
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f6f8fb;
+        --surface: #ffffff;
+        --line: #d0d7de;
+        --text: #1f2328;
+        --muted: #57606a;
+        --accent: #0969da;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: "IBM Plex Sans", "Noto Sans SC", "Segoe UI", sans-serif;
+        background: var(--bg);
+        color: var(--text);
+      }
+      a { color: var(--accent); text-decoration: none; }
+      a:hover { text-decoration: underline; }
+      .shell {
+        width: min(960px, calc(100vw - 32px));
+        margin: 0 auto;
+      }
+      .topbar {
+        border-bottom: 1px solid var(--line);
+        background: rgba(255,255,255,0.9);
+        backdrop-filter: blur(12px);
+      }
+      .topbar-inner {
+        min-height: 64px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+      }
+      .brand {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+      }
+      .brand strong { font-size: 14px; }
+      .brand span { color: var(--muted); font-size: 12px; }
+      .main {
+        padding: 40px 0 72px;
+      }
+      .card {
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: 16px;
+      }
+      .footer {
+        padding: 24px 0 40px;
+        color: var(--muted);
+        font-size: 14px;
+      }
+      article.prose {
+        padding: 28px;
+        line-height: 1.7;
+      }
+      article.prose h1,
+      article.prose h2,
+      article.prose h3 {
+        line-height: 1.2;
+      }
+      article.prose pre,
+      article.prose code {
+        font-family: "Fira Code", monospace;
+      }
+    </style>
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="shell topbar-inner">
+        <a class="brand" href="/">
+          <strong>oneceo blog</strong>
+          <span>Docs, workflows, and product notes</span>
+        </a>
+        <nav>
+          <a href="/blog">All posts</a>
+          <span style="margin: 0 10px; color: var(--line)">/</span>
+          <a href="https://oneceo.ai">Main site</a>
+        </nav>
+      </div>
+    </header>
+    <main class="main">
+      <div class="shell">
+        <slot />
+      </div>
+    </main>
+    <footer class="shell footer">
+      <span>Separate content site for blog.oneceo.ai.</span>
+    </footer>
+  </body>
+</html>

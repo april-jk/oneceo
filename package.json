@@ -6,10 +6,12 @@
   "scripts": {
     "dev": "pnpm --filter web dev & pnpm --filter api dev",
     "dev:web": "pnpm --filter web dev",
+    "dev:blog": "pnpm --filter blog dev",
     "dev:api": "pnpm --filter api dev",
     "dev:kvm": "pnpm --filter kvm-orchestrator dev",
     "build": "pnpm --filter @oneceo/shared build && pnpm --filter web build && pnpm --filter api build",
     "build:web": "pnpm --filter web build",
+    "build:blog": "pnpm --filter blog build",
     "build:api": "pnpm --filter api build",
     "lint": "pnpm -r lint",
     "type-check": "pnpm -r type-check",

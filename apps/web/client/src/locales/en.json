@@ -1547,9 +1547,8 @@
   },
   "homePage": {
     "platformSubtitle": "AI Agent Platform",
-    "eyebrow": "AI agent control tower",
-    "title": "Plan, execute, deploy, and review work with one AI agent control tower",
-    "subtitle": "oneceo helps teams turn requests into accountable execution flows with AI agents, deliverables, deployment, and operational review in one workspace.",
+    "title": "AI Agent",
+    "subtitle": "What can I help you with today?",
     "textareaPlaceholder": "Type your message here...",
     "projectContextLoading": "Loading project...",
     "projectSelectorLabel": "Select the session project",
@@ -1559,80 +1558,11 @@
     "selectModel": "Select AI model",
     "voiceInput": "Voice input",
     "sendMessage": "Send message",
-    "pillarsAriaLabel": "Core platform pillars",
-    "workflowEyebrow": "How it works",
-    "workflowTitle": "One workflow from request to released output",
-    "workflowSubtitle": "Use the landing prompt box for planning, bug triage, content production, deployment preparation, or operational review. The platform keeps the execution path visible instead of hiding it behind a chat-only surface.",
-    "useCasesEyebrow": "High-value use cases",
-    "useCasesTitle": "Built for teams that need real execution, not just answers",
-    "faqEyebrow": "FAQ",
-    "faqTitle": "What teams usually want to know before trying oneceo",
-    "stepLabel": "Step {{index}}",
     "models": {
       "lite": "Agent Lite",
       "pro": "Agent Pro",
       "max": "Agent Max"
     },
-    "controlPillars": [
-      {
-        "title": "Execution with evidence",
-        "description": "Keep prompts, tool calls, files, and deliverables on one visible timeline so teams can review what the agent actually did."
-      },
-      {
-        "title": "Deployment in the same loop",
-        "description": "Move from planning to website delivery, deployment checks, and runtime validation without switching platforms or losing context."
-      },
-      {
-        "title": "Governance without slowdown",
-        "description": "Give operators a task control tower for sessions, environments, analytics, and audit trails when work becomes high-stakes."
-      }
-    ],
-    "workflowSteps": [
-      {
-        "title": "Start from a real business request",
-        "description": "Launch a product task, debug an issue, prepare a rollout, or create content from the same entry point."
-      },
-      {
-        "title": "Let the agent build accountable artifacts",
-        "description": "Plans, structured docs, edits, and follow-up actions are generated as inspectable output instead of disappearing into hidden state."
-      },
-      {
-        "title": "Connect deployment and runtime checks",
-        "description": "The workflow can continue into preview, environment review, deployment handoff, and analytics-aware verification."
-      },
-      {
-        "title": "Review and iterate with operators",
-        "description": "Managers and admins can inspect state, intervene when needed, and keep the final outcome auditable."
-      }
-    ],
-    "useCases": [
-      {
-        "title": "Product launch coordination",
-        "description": "Break down launches into milestones, deliverables, dependencies, and rollout checks without losing accountability."
-      },
-      {
-        "title": "Bug triage and technical delivery",
-        "description": "Investigate logs, draft implementation plans, prepare technical documents, and keep deployment follow-through attached to the same task."
-      },
-      {
-        "title": "Operations and growth execution",
-        "description": "Turn market research, competitor analysis, campaign planning, and weekly operating reviews into concrete next actions."
-      }
-    ],
-    "faqItems": [
-      {
-        "question": "Is oneceo just another chat interface?",
-        "answer": "No. The product is designed as an AI agent control tower where execution steps, artifacts, deployment context, and review surfaces stay visible."
-      },
-      {
-        "question": "What kind of work fits best?",
-        "answer": "oneceo is strongest when work needs planning, file outputs, operational context, human review, or deployment follow-through instead of a single disposable answer."
-      },
-      {
-        "question": "What should Google index right now?",
-        "answer": "At this stage the homepage is the public acquisition surface. Authenticated workspace routes stay available to users but are intentionally excluded from search indexing."
-      }
-    ],
     "quickActions": [
       [
         "Help me break down next week's product launch tasks and timeline",

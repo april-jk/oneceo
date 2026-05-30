@@ -1547,9 +1547,8 @@
   },
   "homePage": {
     "platformSubtitle": "AI Agent Platform",
-    "eyebrow": "AI Agent 任务塔台",
-    "title": "把规划、执行、部署和复核收进同一个 AI Agent 指挥台",
-    "subtitle": "oneceo 面向真实执行链路，把需求拆解、任务推进、产物生成、部署衔接和运行复核收进一个可追溯的工作空间。",
+    "title": "AI Agent",
+    "subtitle": "今天我可以帮你做什么？",
     "textareaPlaceholder": "在这里输入你的消息...",
     "projectContextLoading": "正在加载项目...",
     "projectSelectorLabel": "选择会话归属项目",
@@ -1559,80 +1558,11 @@
     "selectModel": "选择 AI 模型",
     "voiceInput": "语音输入",
     "sendMessage": "发送消息",
-    "pillarsAriaLabel": "平台核心能力",
-    "workflowEyebrow": "工作链路",
-    "workflowTitle": "从需求输入到正式交付保持一条可复核主线",
-    "workflowSubtitle": "首页输入框既能用于规划、排障、内容生产，也能进入部署准备和运行复核。平台强调执行路径可见，而不是把关键动作都藏进对话黑箱里。",
-    "useCasesEyebrow": "高价值场景",
-    "useCasesTitle": "更适合需要真实推进结果的团队",
-    "faqEyebrow": "常见问题",
-    "faqTitle": "团队在试用 oneceo 前最常问的几件事",
-    "stepLabel": "步骤 {{index}}",
     "models": {
       "lite": "Agent Lite",
       "pro": "Agent Pro",
       "max": "Agent Max"
     },
-    "controlPillars": [
-      {
-        "title": "执行过程可见",
-        "description": "把提示词、工具调用、文件改动和最终产物放进同一时间线，便于团队回看智能体到底做了什么。"
-      },
-      {
-        "title": "部署与交付同链路推进",
-        "description": "从需求规划一路推进到网站交付、部署检查和运行验证，不用在多个系统之间来回切换。"
-      },
-      {
-        "title": "治理能力不脱节",
-        "description": "当任务进入高风险阶段，管理员仍能查看会话、环境、分析数据和审计线索，不会只剩一个聊天窗口。"
-      }
-    ],
-    "workflowSteps": [
-      {
-        "title": "从真实业务请求启动",
-        "description": "无论是产品发布、线上排障、部署准备还是内容生产，都从同一个入口进入。"
-      },
-      {
-        "title": "智能体输出可检查产物",
-        "description": "规划文档、结构化结果、文件改动和后续动作都会留下可复核输出，而不是消失在隐藏状态里。"
-      },
-      {
-        "title": "把部署和运行检查接上",
-        "description": "同一条链路可以继续进入预览、环境检查、部署交接和带分析能力的结果验证。"
-      },
-      {
-        "title": "让操作者持续介入复核",
-        "description": "经理和管理员可以在关键节点查看状态、人工介入，并保持最后结果具备审计线索。"
-      }
-    ],
-    "useCases": [
-      {
-        "title": "产品发布与项目推进",
-        "description": "把发布任务拆成里程碑、产物、依赖和上线检查项，避免执行过程失焦。"
-      },
-      {
-        "title": "排障与技术交付",
-        "description": "从日志排查、方案设计到改动说明和部署跟进，始终挂在同一个任务上下文里。"
-      },
-      {
-        "title": "运营与增长执行",
-        "description": "把市场研究、竞品分析、活动策划和周度经营复盘沉淀成明确下一步动作。"
-      }
-    ],
-    "faqItems": [
-      {
-        "question": "oneceo 只是另一个聊天界面吗？",
-        "answer": "不是。它更像 AI Agent 任务塔台，强调执行步骤、产物、部署上下文和复核界面持续可见。"
-      },
-      {
-        "question": "什么类型的工作最适合放进来？",
-        "answer": "当任务需要规划、文件输出、运行上下文、人工复核或部署跟进时，oneceo 会比一次性问答更有价值。"
-      },
-      {
-        "question": "当前希望 Google 收录哪些页面？",
-        "answer": "现阶段只把首页作为品牌与获客落地页。已登录工作台页面保持可访问，但会主动排除在搜索索引之外。"
-      }
-    ],
     "quickActions": [
       [
         "帮我梳理下周发布会的任务分工与时间排期",

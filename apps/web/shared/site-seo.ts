@@ -10,15 +10,13 @@ const DEFAULT_SITE_ORIGIN = "https://oneceo.ai";
 
 const SEO_COPY: Record<SupportedSeoLanguage, LocalizedSeoCopy> = {
   zh: {
-    title: "oneceo | AI Agent 任务执行与部署指挥台",
-    description:
-      "oneceo 是面向执行与交付的 AI Agent 平台，帮助团队把需求拆解、任务推进、产物生成、站点部署与运行复核收进同一条工作链路。",
+    title: "oneceo | AI Agent Platform",
+    description: "oneceo 是 AI Agent 平台。",
     siteName: "oneceo",
   },
   en: {
-    title: "oneceo | AI agent control tower for execution and deployment",
-    description:
-      "oneceo is an AI agent platform for planning, execution, deliverables, deployment, and operational review in one accountable workflow.",
+    title: "oneceo | AI Agent Platform",
+    description: "oneceo is an AI agent platform.",
     siteName: "oneceo",
   },
 };

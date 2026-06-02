@@ -7,6 +7,7 @@ import { verifyPassword } from '../src/utils/auth-password';
 const originalListAll = adminUserDAO.listAll;
 const originalCreate = adminUserDAO.create;
 const originalUpdateBootstrapCredentials = adminUserDAO.updateBootstrapCredentials;
+const TEST_BOOTSTRAP_PASSWORD = 'test-admin-bootstrap-password';
 
 after(() => {
   adminUserDAO.listAll = originalListAll;
@@ -19,7 +20,7 @@ beforeEach(() => {
   adminUserDAO.create = originalCreate;
   adminUserDAO.updateBootstrapCredentials = originalUpdateBootstrapCredentials;
   delete process.env.ONECEO_ADMIN_BOOTSTRAP_LOGIN;
-  delete process.env.ONECEO_ADMIN_BOOTSTRAP_PASSWORD;
+  process.env.ONECEO_ADMIN_BOOTSTRAP_PASSWORD = TEST_BOOTSTRAP_PASSWORD;
 });
 
 test('ensureBootstrapAdmin creates the default admin66 account for empty admin stores', async () => {
@@ -37,7 +38,7 @@ test('ensureBootstrapAdmin creates the default admin66 account for empty admin s
   assert.equal(createdInput?.loginName, 'admin66');
   assert.equal(createdInput?.displayName, 'Platform Admin');
   assert.equal(createdInput?.role, 'super_admin');
-  assert.ok(await verifyPassword('cdiSSj@qq.2123comccc', createdInput?.passwordHash || ''));
+  assert.ok(await verifyPassword(TEST_BOOTSTRAP_PASSWORD, createdInput?.passwordHash || ''));
 });
 
 test('ensureBootstrapAdmin migrates the legacy bootstrap admin to admin66 when no target admin exists', async () => {
@@ -65,7 +66,7 @@ test('ensureBootstrapAdmin migrates the legacy bootstrap admin to admin66 when n
   await service.ensureBootstrapAdmin();
 
   assert.equal(updateInput?.loginName, 'admin66');
-  assert.ok(await verifyPassword('cdiSSj@qq.2123comccc', updateInput?.passwordHash || ''));
+  assert.ok(await verifyPassword(TEST_BOOTSTRAP_PASSWORD, updateInput?.passwordHash || ''));
 });
 
 test('ensureBootstrapAdmin syncs the target admin password when admin66 already exists', async () => {
@@ -96,14 +97,14 @@ test('ensureBootstrapAdmin syncs the target admin password when admin66 already 
 
   assert.equal(updatedId, 'target-admin');
   assert.equal(updateInput?.loginName, 'admin66');
-  assert.ok(await verifyPassword('cdiSSj@qq.2123comccc', updateInput?.passwordHash || ''));
+  assert.ok(await verifyPassword(TEST_BOOTSTRAP_PASSWORD, updateInput?.passwordHash || ''));
 });
 
-test('ensureBootstrapAdmin ignores legacy bootstrap env overrides and keeps the fixed admin66 credential', async () => {
+test('ensureBootstrapAdmin uses ONECEO_ADMIN_BOOTSTRAP_PASSWORD for the fixed admin66 credential', async () => {
   const service = new AdminAuthService();
   let createdInput: Parameters<typeof adminUserDAO.create>[0] | null = null;
   process.env.ONECEO_ADMIN_BOOTSTRAP_LOGIN = 'admin';
-  process.env.ONECEO_ADMIN_BOOTSTRAP_PASSWORD = 'admin123456';
+  process.env.ONECEO_ADMIN_BOOTSTRAP_PASSWORD = 'another-test-bootstrap-password';
 
   adminUserDAO.listAll = async () => [];
   adminUserDAO.create = async (input) => {
@@ -114,5 +115,5 @@ test('ensureBootstrapAdmin ignores legacy bootstrap env overrides and keeps the 
   await service.ensureBootstrapAdmin();
 
   assert.equal(createdInput?.loginName, 'admin66');
-  assert.ok(await verifyPassword('cdiSSj@qq.2123comccc', createdInput?.passwordHash || ''));
+  assert.ok(await verifyPassword('another-test-bootstrap-password', createdInput?.passwordHash || ''));
 });

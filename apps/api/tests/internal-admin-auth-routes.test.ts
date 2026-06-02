@@ -14,6 +14,7 @@ const originalLogout = adminAuthService.logout;
 const originalResolve = adminAuthService.resolveAdminBySessionToken;
 const originalEnsureBootstrapAdmin = adminAuthService.ensureBootstrapAdmin;
 const originalToken = process.env.ONECEO_INTERNAL_TOKEN;
+const TEST_ADMIN_PASSWORD = 'test-admin-bootstrap-password';
 
 after(() => {
   adminAuthService.login = originalLogin;
@@ -73,7 +74,7 @@ test('POST /api/internal/admin-auth/login returns 401 when token is configured b
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         loginName: 'admin66',
-        password: 'cdiSSj@qq.2123comccc',
+        password: TEST_ADMIN_PASSWORD,
       }),
     });
     const payload = await response.json();
@@ -122,7 +123,7 @@ test('POST /api/internal/admin-auth/login returns 403 when internal token is not
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         loginName: 'admin66',
-        password: 'cdiSSj@qq.2123comccc',
+        password: TEST_ADMIN_PASSWORD,
       }),
     });
     const payload = await response.json();
@@ -155,7 +156,7 @@ test('POST /api/internal/admin-auth/login returns session token and admin user',
       },
       body: JSON.stringify({
         loginName: 'admin66',
-        password: 'cdiSSj@qq.2123comccc',
+        password: TEST_ADMIN_PASSWORD,
       }),
     });
     const payload = await response.json();

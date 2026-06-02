@@ -6,7 +6,10 @@ const { chromium } = requireFromWeb('@playwright/test');
 
 const baseUrl = process.env.ADMIN_MANAGEMENT_BASE_URL || 'http://127.0.0.1:9310';
 const loginName = process.env.ONECEO_ADMIN_E2E_LOGIN || process.env.ONECEO_ADMIN_BOOTSTRAP_LOGIN || 'admin66';
-const password = process.env.ONECEO_ADMIN_E2E_PASSWORD || process.env.ONECEO_ADMIN_BOOTSTRAP_PASSWORD || 'cdiSSj@qq.2123comccc';
+const password = process.env.ONECEO_ADMIN_E2E_PASSWORD || process.env.ONECEO_ADMIN_BOOTSTRAP_PASSWORD;
+if (!password) {
+  throw new Error('ONECEO_ADMIN_E2E_PASSWORD or ONECEO_ADMIN_BOOTSTRAP_PASSWORD is required');
+}
 const allowMutations = process.env.ONECEO_E2E_ALLOW_BILLING_MUTATIONS === 'true';
 
 async function loginIfNeeded(page) {

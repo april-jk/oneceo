@@ -26,7 +26,7 @@
 | 管理后台API | http://localhost:9310 |
 | 数据库 | postgresql://postgres:postgres@127.0.0.1:5432/oneceo_local |
 | 内部Token | oneceo-internal-dev-token |
-| Admin账号 | admin66 / cdiSSj@qq.2123comccc |
+| Admin账号 | admin66 / `ONECEO_ADMIN_BOOTSTRAP_PASSWORD` |
 
 ---
 

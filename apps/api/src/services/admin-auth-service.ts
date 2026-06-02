@@ -8,7 +8,14 @@ function asText(value: unknown) {
 }
 
 const DEFAULT_ADMIN_LOGIN = 'admin66';
-const DEFAULT_ADMIN_PASSWORD = 'cdiSSj@qq.2123comccc';
+
+function resolveBootstrapAdminPassword() {
+  const password = asText(process.env.ONECEO_ADMIN_BOOTSTRAP_PASSWORD);
+  if (!password) {
+    throw new Error('ONECEO_ADMIN_BOOTSTRAP_PASSWORD is required to bootstrap admin credentials');
+  }
+  return password;
+}
 
 function toPublicAdmin(admin: Awaited<ReturnType<typeof adminUserDAO.getById>>) {
   if (!admin) return null;
@@ -26,7 +33,7 @@ function toPublicAdmin(admin: Awaited<ReturnType<typeof adminUserDAO.getById>>) 
 export class AdminAuthService {
   async ensureBootstrapAdmin() {
     const loginName = DEFAULT_ADMIN_LOGIN;
-    const password = DEFAULT_ADMIN_PASSWORD;
+    const password = resolveBootstrapAdminPassword();
     const existing = await adminUserDAO.listAll();
     if (existing.length > 0) {
       const targetLoginName = loginName.toLowerCase();

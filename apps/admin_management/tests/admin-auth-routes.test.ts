@@ -3,6 +3,8 @@ import { test } from 'node:test';
 import express from 'express';
 import { createAdminAuthRoutes } from '../server/routes/admin-auth-routes';
 
+const TEST_ADMIN_PASSWORD = 'test-admin-bootstrap-password';
+
 type TestServer = {
   origin: string;
   close: () => Promise<void>;
@@ -62,7 +64,7 @@ test('POST /api/admin/auth/login proxies login and writes admin cookie', async (
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         loginName: 'admin66',
-        password: 'cdiSSj@qq.2123comccc',
+        password: TEST_ADMIN_PASSWORD,
       }),
     });
     const payload = await response.json();

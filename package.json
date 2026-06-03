@@ -33,7 +33,8 @@
   "pnpm": {
     "overrides": {
       "dompurify": "3.4.2",
-      "e2b>chalk": "4.1.2"
+      "e2b>chalk": "4.1.2",
+      "tailwindcss>nanoid": "3.3.7"
     }
   }
 }

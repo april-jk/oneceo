@@ -16,6 +16,7 @@ jobs:
   validate-source-branch:
     name: validate-source-branch
     runs-on: ubuntu-latest
+    if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
     steps:
       - name: Enforce task-creation-agent as the only source branch
         env:

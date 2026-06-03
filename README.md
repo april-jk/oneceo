@@ -1,237 +1,141 @@
-# oneceo.ai - AI Agent 项目管理平台
+# OneCEO
 
-一个基于 AI Agent 的智能项目管理平台，支持项目-经理-员工三层级智能调度系统。
+OneCEO 是一个面向 AI 项目执行与平台治理的多应用仓库。当前仓库包含用户工作台、API 编排层、管理后台、博客站点，以及围绕 E2B / OSAC / Altus 的运行时与文档资产。
 
-## 项目简介
+仓库现在采用 MIT 许可证，并准备按开源仓库方式持续整理；如果你是第一次进入项目，先从本文的环境、启动和验证命令开始。
 
-oneceo.ai 是一个创新的项目管理平台，通过 AI Agent 技术实现智能化的项目规划、任务分配和执行管理。系统采用三层级架构：
+## Workspace Layout
 
-**CEO Agent（总经理）**：负责项目规划、资源分配和战略决策  
-**Manager Agent（项目经理）**：负责任务分解、团队管理和进度跟踪  
-**Employee Agent（员工）**：负责具体任务执行和交付
-
-## 项目结构
-
-```
+```text
 oneceo/
 ├── apps/
-│   ├── web/          # 前端应用（React + Vite + Tailwind CSS）
-│   └── api/          # 后端 API（Express + Socket.io + BullMQ）
+│   ├── api/                # API、任务会话、Altus、OSAC、Sandbox 主编排
+│   ├── web/                # 用户工作台（React + Vite）
+│   ├── admin_management/   # 管理后台（独立 server + web）
+│   └── blog/               # 文档/博客站点（Astro）
 ├── packages/
-│   ├── shared/       # 共享类型定义和工具函数
-│   ├── database/     # 数据库 Schema 和迁移（Prisma）
-│   └── config/       # 共享配置文件
-├── docs/             # 项目文档
-│   ├── api/         # API 文档
-│   ├── architecture/# 架构设计文档
-│   └── development/ # 开发指南
-└── scripts/          # 构建和部署脚本
+│   └── shared/             # 共享类型与工具
+├── services/
+│   └── kvm-orchestrator/   # 历史/附属服务代码
+├── e2b_templates/          # Sandbox 模板与说明
+├── docs/                   # 架构、功能、测试与部署文档
+└── .github/workflows/      # CI / 安全 / Pages 工作流
 ```
 
-## 快速开始
+## Requirements
 
-### 环境要求
+- Node.js 20+
+- pnpm 10.4.1+
+- npm 10+
 
-- **Node.js**: 18.0 或更高版本
-- **pnpm**: 8.0 或更高版本
-- **PostgreSQL**: 14 或更高版本（可选，用于数据持久化）
-- **Redis**: 7 或更高版本（可选，用于任务队列）
+可选但常见的本地依赖：
 
-### 安装依赖
+- PostgreSQL
+- Redis
+
+## Install
 
 ```bash
-# 克隆仓库
 git clone https://github.com/april-jk/oneceo.git
 cd oneceo
-
-# 安装所有依赖
-pnpm install
-
-# 构建共享包
-pnpm --filter @oneceo/shared build
+pnpm install --frozen-lockfile
+npm --prefix apps/admin_management install
 ```
 
-### 开发模式
+`apps/admin_management` 目前使用独立 `npm` 依赖树；其类型检查与开发命令需要先完成本目录安装。
+
+## Environment
+
+主应用环境变量模板在 [apps/.env.example](/Users/watson/codingProj/oneceo/apps/.env.example)。
+
+推荐本地启动方式：
+
+1. 复制主模板并填入你自己的值。
+2. 如需本地管理后台，再单独配置 `apps/admin_management/.env`。
 
 ```bash
-# 同时启动前端和后端开发服务器
-pnpm dev
-
-# 或者分别启动
-pnpm dev:web    # 前端：http://localhost:3000
-pnpm dev:api    # 后端：http://localhost:4000
+cp apps/.env.example apps/.env
+cp apps/.env.example apps/.env.localhost
 ```
 
-### 生产构建
+常见变量：
+
+- `FRONTEND_URL`
+- `VITE_API_BASE_URL`
+- `DATABASE_URL`
+- `ONECEO_REDIS_ENABLED`
+- `REDIS_URL`
+- `OPENAI_API_KEY`
+- `E2B_API_KEY`
+
+注意：
+
+- 不要提交真实 `.env` 文件或任何第三方密钥。
+- 浏览器侧配置不要写 `railway.internal` 之类的内网地址。
+- 管理后台本地代理配置位于 [apps/admin_management/.env](/Users/watson/codingProj/oneceo/apps/admin_management/.env)。
+
+## Development
+
+根工作区常用命令：
 
 ```bash
-# 构建所有应用
+pnpm dev:web
+pnpm dev:api
+pnpm dev:blog
+```
+
+管理后台单独启动：
+
+```bash
+npm --prefix apps/admin_management run dev
+```
+
+如果你只想跑某个应用，优先在对应目录或通过 `--filter` / `--prefix` 执行，不必一次拉起全部进程。
+
+## Verification
+
+最小静态验证命令：
+
+```bash
+pnpm --filter api type-check
+pnpm --filter web check
+npm --prefix apps/admin_management run type-check
+```
+
+全仓库常用命令：
+
+```bash
 pnpm build
-
-# 或者分别构建
-pnpm build:web
-pnpm build:api
+pnpm type-check
+pnpm test
 ```
 
-## 技术栈
+说明：
 
-### 前端技术栈
+- `pnpm type-check` 会递归执行 workspace 内定义了 `type-check` 的包。
+- `apps/admin_management` 目前不在 `pnpm` workspace 内统一安装依赖，因此继续使用 `npm --prefix ...`。
 
-| 技术 | 版本 | 用途 |
-|-----|------|------|
-| React | 19.2.1 | UI 框架 |
-| TypeScript | 5.6.3 | 类型系统 |
-| Tailwind CSS | 4.1.14 | 样式框架 |
-| Vite | 7.1.7 | 构建工具 |
-| Wouter | 3.3.5 | 路由管理 |
-| Framer Motion | 12.23.22 | 动画库 |
-| Radix UI | - | UI 组件库 |
-| Socket.io Client | - | 实时通信 |
+## Architecture Notes
 
-### 后端技术栈
+- `apps/api` 是任务会话、Altus managed、OSAC、Sandbox 生命周期与 LLM proxy 的主入口。
+- `apps/web` 是用户工作台。
+- `apps/admin_management` 是平台管理员控制台。
+- `apps/api/src/connectors/e2b-connector.ts` 是主链 E2B 连接入口。
+- `apps/api/src/connectors/llm-proxy-connector.ts` 是统一上游模型访问入口。
 
-| 技术 | 版本 | 用途 |
-|-----|------|------|
-| Node.js | 18+ | 运行时环境 |
-| Express | 4.21.2 | Web 框架 |
-| TypeScript | 5.6.3 | 类型系统 |
-| Socket.io | 4.8.1 | WebSocket 服务 |
-| BullMQ | 5.36.3 | 任务队列 |
-| Prisma | 6.5.0 | ORM |
-| PostgreSQL | 14+ | 关系数据库 |
-| Redis | 7+ | 缓存和队列 |
+更细的开发入口见：
 
-## 核心功能
+- [AGENTS.md](/Users/watson/codingProj/oneceo/AGENTS.md)
+- [docs/AGENTS_GUIDE/PROJECT_PROMPT.md](/Users/watson/codingProj/oneceo/docs/AGENTS_GUIDE/PROJECT_PROMPT.md)
+- [docs/AGENTS_GUIDE/AGENT_CODE_MODIFICATION_GUIDE.md](/Users/watson/codingProj/oneceo/docs/AGENTS_GUIDE/AGENT_CODE_MODIFICATION_GUIDE.md)
 
-### 已实现功能
+## OSS Collaboration
 
-- ✅ **项目管理系统**：项目-经理-员工三层级管理架构
-- ✅ **总经理视图**：统计数据展示和 AI 对话界面
-- ✅ **任务详情页面**：对话式任务管理界面
-- ✅ **用户系统**：用户信息、积分和会员状态管理
-- ✅ **响应式设计**：支持桌面端和移动端
-- ✅ **实时通信**：WebSocket 基础架构
-- ✅ **类型共享**：前后端共享 TypeScript 类型定义
+- 贡献流程见 [CONTRIBUTING.md](/Users/watson/codingProj/oneceo/CONTRIBUTING.md)
+- 行为准则见 [CODE_OF_CONDUCT.md](/Users/watson/codingProj/oneceo/CODE_OF_CONDUCT.md)
+- 安全问题上报见 [SECURITY.md](/Users/watson/codingProj/oneceo/SECURITY.md)
+- 支持与提问入口见 [SUPPORT.md](/Users/watson/codingProj/oneceo/SUPPORT.md)
 
-### 开发中功能
+## License
 
-- 🚧 **AI Agent 调度系统**：CEO/Manager/Employee Agent 智能调度
-- 🚧 **LLM 集成**：OpenAI GPT-4 / Anthropic Claude 集成
-- 🚧 **任务队列系统**：基于 BullMQ 的异步任务处理
-- 🚧 **数据持久化**：Prisma + PostgreSQL 数据库集成
-- 🚧 **用户认证系统**：JWT 身份验证和权限管理
-- 🚧 **文件上传功能**：支持附件上传和管理
-
-### 计划中功能
-
-- 📋 **实时协作**：多用户实时协作编辑
-- 📋 **通知系统**：任务提醒和进度通知
-- 📋 **数据分析**：项目数据可视化和报表
-- 📋 **API 文档**：自动生成的 API 文档
-- 📋 **单元测试**：完整的测试覆盖
-- 📋 **CI/CD**：自动化测试和部署
-
-## 开发指南
-
-### 添加新的 API 端点
-
-在 `apps/api/src/index.ts` 中添加新的路由：
-
-```typescript
-app.get('/api/your-endpoint', (req, res) => {
-  res.json({ success: true, data: {} });
-});
-```
-
-### 添加新的共享类型
-
-在 `packages/shared/src/types/index.ts` 中定义类型：
-
-```typescript
-export interface YourType {
-  id: string;
-  name: string;
-}
-```
-
-然后在前端或后端导入使用：
-
-```typescript
-import type { YourType } from '@oneceo/shared';
-```
-
-### 前端使用共享类型
-
-在 `apps/web` 中导入共享类型：
-
-```typescript
-import type { Project, Task, Message } from '@oneceo/shared';
-```
-
-## 配置说明
-
-### 环境变量
-
-复制 `apps/api/.env.example` 到 `apps/api/.env` 并填写配置：
-
-```bash
-cp apps/api/.env.example apps/api/.env
-```
-
-主要配置项：
-
-- `PORT`: API 服务器端口（默认 4000）
-- `FRONTEND_URL`: 前端应用 URL（用于 CORS）
-- `DATABASE_URL`: PostgreSQL 连接字符串
-- `REDIS_URL`: Redis 连接字符串
-- `OPENAI_API_KEY`: OpenAI API 密钥
-
-## 部署指南
-
-### 使用 Docker（推荐）
-
-```bash
-# 构建镜像
-docker-compose build
-
-# 启动服务
-docker-compose up -d
-```
-
-### 手动部署
-
-```bash
-# 构建应用
-pnpm build
-
-# 启动前端（静态文件服务）
-cd apps/web/dist && npx serve -s
-
-# 启动后端
-cd apps/api && node dist/index.js
-```
-
-## 贡献指南
-
-欢迎贡献代码！请遵循以下步骤：
-
-1. Fork 本仓库
-2. 创建特性分支：`git checkout -b feature/your-feature`
-3. 提交更改：`git commit -m 'Add some feature'`
-4. 推送到分支：`git push origin feature/your-feature`
-5. 提交 Pull Request
-
-## 许可证
-
-本项目采用 MIT 许可证。详见 [LICENSE](LICENSE) 文件。
-
-## 联系方式
-
-- **GitHub**: https://github.com/april-jk/oneceo
-- **Issues**: https://github.com/april-jk/oneceo/issues
-
----
-
-**开发状态**: 🚧 活跃开发中  
-**版本**: 1.0.0  
-**最后更新**: 2026-02-03
+本项目采用 MIT 许可证，详见 [LICENSE](/Users/watson/codingProj/oneceo/LICENSE)。

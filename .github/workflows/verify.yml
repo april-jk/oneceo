@@ -1,0 +1,44 @@
+name: Verify
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - task-creation-agent
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  workspace-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.4.1
+
+      - name: Install workspace dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install admin_management dependencies
+        run: npm --prefix apps/admin_management install
+
+      - name: Type-check API
+        run: pnpm --filter api type-check
+
+      - name: Type-check Web
+        run: pnpm --filter web check
+
+      - name: Type-check Admin Management
+        run: npm --prefix apps/admin_management run type-check

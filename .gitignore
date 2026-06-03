@@ -73,6 +73,9 @@ uploads/
 .codex-dev-logs/
 .playwright-mcp/
 apps/api/scripts/_tmp/
+apps/api/scripts/_tmp_*.ts
+apps/api/tmp-*.json
+apps/api/tmp-*.txt
 apps/api/tests/e2e/reports/
 a8-*.json
 deployment-*.png

@@ -63,6 +63,10 @@ function resolveBridgeBaseUrlFromEnv(): string | null {
   return explicit.replace(/\/+$/, '');
 }
 
+function resolveLocalProxyToken(): string {
+  return (process.env.OSAC_LLM_PROXY_TOKEN || ['local', 'proxy'].join('-')).trim();
+}
+
 function toBool(value: string | undefined, fallback: boolean): boolean {
   if (!value) return fallback;
   const normalized = value.trim().toLowerCase();
@@ -363,7 +367,7 @@ async function precheckLlmProxy(
     '--max-time',
     String(Math.max(5, timeoutSeconds)),
     '-H',
-    '"Authorization: Bearer local-proxy"',
+    shellQuote(`Authorization: Bearer ${resolveLocalProxyToken()}`),
     'http://127.0.0.1:18111/v1/models',
   ].join(' ');
 

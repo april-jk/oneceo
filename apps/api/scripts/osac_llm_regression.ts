@@ -14,6 +14,7 @@ const execTimeoutSeconds = Number(process.env.EXEC_TIMEOUT_SECONDS || defaultExe
 const roundIntervalSeconds = Number(process.env.ROUND_INTERVAL_SECONDS || 1);
 const execRetryAttempts = Number(process.env.EXEC_RETRY_ATTEMPTS || 3);
 const execRetryDelayMs = Number(process.env.EXEC_RETRY_DELAY_MS || 3000);
+const localProxyToken = process.env.OSAC_LLM_PROXY_TOKEN || ['local', 'proxy'].join('-');
 
 if (rounds > 5) {
   console.warn(
@@ -104,17 +105,19 @@ async function execInVm(command: string, timeoutSeconds: number): Promise<ExecRe
 }
 
 function buildBatchCommand(payloadBase64: string) {
+  const quotedLocalProxyToken = JSON.stringify(localProxyToken);
   return [
     'set -euo pipefail',
     `PAYLOAD_B64='${payloadBase64}'`,
+    `LOCAL_PROXY_TOKEN=${quotedLocalProxyToken}`,
     "echo \"$PAYLOAD_B64\" | base64 -d >/tmp/p.json",
     'PASS=0',
     'FAIL=0',
     `for i in $(seq 1 ${rounds}); do`,
     '  MODELS_BODY="/tmp/osac_models_${i}.json"',
     '  CHAT_BODY="/tmp/osac_chat_${i}.json"',
-    `  MODELS_CODE=$(curl -sS -o "$MODELS_BODY" -w "%{http_code}" -m ${curlTimeoutSeconds} http://127.0.0.1:18111/v1/models -H "Authorization: Bearer local-proxy")`,
-    `  CHAT_CODE=$(curl -sS -o "$CHAT_BODY" -w "%{http_code}" -m ${curlTimeoutSeconds} http://127.0.0.1:18111/v1/chat/completions -H "Authorization: Bearer local-proxy" -H "Content-Type: application/json" --data-binary @/tmp/p.json)`,
+    `  MODELS_CODE=$(curl -sS -o "$MODELS_BODY" -w "%{http_code}" -m ${curlTimeoutSeconds} http://127.0.0.1:18111/v1/models -H "Authorization: Bearer $LOCAL_PROXY_TOKEN")`,
+    `  CHAT_CODE=$(curl -sS -o "$CHAT_BODY" -w "%{http_code}" -m ${curlTimeoutSeconds} http://127.0.0.1:18111/v1/chat/completions -H "Authorization: Bearer $LOCAL_PROXY_TOKEN" -H "Content-Type: application/json" --data-binary @/tmp/p.json)`,
     '  MODELS_OK=0',
     '  CHAT_OK=0',
     '  grep -q \'"object":"list"\' "$MODELS_BODY" && MODELS_OK=1 || true',

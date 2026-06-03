@@ -25,7 +25,7 @@ function asText(value: unknown) {
 async function loadTestAccount(): Promise<TestAccount> {
   const raw = await readFile(TEST_ACCOUNT_FILE, "utf8");
   const parsed = JSON.parse(raw);
-  return {
+  const account = {
     email: asText(process.env.ONECEO_E2E_USER_EMAIL) || asText(parsed.email),
     password: asText(process.env.ONECEO_E2E_USER_PASSWORD) || asText(parsed.password),
     displayName:
@@ -33,6 +33,12 @@ async function loadTestAccount(): Promise<TestAccount> {
       asText(parsed.displayName) ||
       "Playwright Test User",
   };
+  if (!account.email || !account.password) {
+    throw new Error(
+      "Playwright test account requires ONECEO_E2E_USER_EMAIL and ONECEO_E2E_USER_PASSWORD or a local e2e/playwright-test-account.json override",
+    );
+  }
+  return account;
 }
 
 let ensureUserPromise: Promise<void> | null = null;

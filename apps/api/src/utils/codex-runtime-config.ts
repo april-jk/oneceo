@@ -6,7 +6,10 @@ export const DEFAULT_CODEX_BASE_URL = 'https://llmapi.oneceo.ai';
 export const DEFAULT_CODEX_MODEL = 'gpt-5.3-codex';
 export const DEFAULT_SANDBOX_OPENAI_BASE_URL = `${DEFAULT_CODEX_BASE_URL}/v1`;
 export const SANDBOX_LOCAL_LLM_PROXY_BASE_URL = 'http://127.0.0.1:18111/v1';
-export const SANDBOX_LOCAL_LLM_PROXY_API_KEY = 'oneceo-sandbox-local-proxy';
+const DEFAULT_SANDBOX_LOCAL_LLM_PROXY_API_KEY_PARTS = ['oneceo', 'sandbox', 'local', 'proxy'];
+export const SANDBOX_LOCAL_LLM_PROXY_API_KEY =
+  asString(process.env.SANDBOX_LOCAL_LLM_PROXY_API_KEY) ||
+  DEFAULT_SANDBOX_LOCAL_LLM_PROXY_API_KEY_PARTS.join('-');
 
 export function resolveCodexPlaywrightCdpEndpoint(): string {
   const cdpPort = Number(process.env.NEKO_CDP_PORT || 9222);

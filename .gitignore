@@ -8,6 +8,10 @@ coverage/
 *.lcov
 apps/web/test-results/
 apps/web/e2e/playwright-test-account.json
+apps/web/screenshots/
+apps/api/scripts/reports/
+apps/api/tests/opencode-sandbox-direct/reports/
+output/playwright/
 
 # Production
 dist/
@@ -104,6 +108,10 @@ apps/api/data/task-creation-memory.json
 apps/api/data/task-creation-cache.json
 apps/api/data/task-creation-message-queue.wal.jsonl
 apps/api/.runtime-cache/
+data/task-creation-memory.json
+screenshot_*.png
+membership-*.png
+image-*.png
 OSAC_client/
 referance/
 进度.md

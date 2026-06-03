@@ -77,6 +77,8 @@ uploads/
 # Local debug artifacts
 .codex-dev-logs/
 .playwright-mcp/
+/debug/
+/tools/
 apps/api/scripts/_tmp/
 apps/api/scripts/_tmp_*.ts
 apps/api/tmp-*.json

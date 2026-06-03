@@ -1,21 +1,12 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { fileURLToPath } from 'node:url';
+import { loadPlaywrightTestAccount } from './test-account.mjs';
 
 const requireFromWeb = createRequire(new URL('../package.json', import.meta.url));
 const { chromium } = requireFromWeb('@playwright/test');
 
 const baseUrl = process.env.WEB_BASE_URL || 'http://127.0.0.1:3000';
-const accountFile = fileURLToPath(new URL('./playwright-test-account.json', import.meta.url));
-const accountConfig = JSON.parse(readFileSync(accountFile, 'utf8'));
-const testAccount = {
-  email: process.env.TEST_EMAIL || process.env.ONECEO_E2E_USER_EMAIL || accountConfig.email,
-  password: process.env.TEST_PASSWORD || process.env.ONECEO_E2E_USER_PASSWORD || accountConfig.password,
-};
-if (!testAccount.email || !testAccount.password) {
-  throw new Error('activation-code-redemption.e2e requires TEST_EMAIL/TEST_PASSWORD or ONECEO_E2E_USER_EMAIL/ONECEO_E2E_USER_PASSWORD');
-}
+const testAccount = await loadPlaywrightTestAccount({ allowTestAliases: true });
 
 async function login(page) {
   await page.goto(baseUrl, { waitUntil: 'networkidle' });

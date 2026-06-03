@@ -83,13 +83,22 @@ function parseJsonSafe(text: string): any {
 async function loadDirectTestAccount(): Promise<DirectTestAccount> {
   const accountFile =
     process.env.ONECEO_DIRECT_TEST_ACCOUNT_FILE || process.env.ONECEO_E2E_TEST_ACCOUNT_FILE || DEFAULT_TEST_ACCOUNT_FILE;
-  const raw = await fs.readFile(accountFile, 'utf8');
-  const parsed = parseJsonSafe(raw);
-  const email = asText(parsed?.email);
-  const password = asText(parsed?.password);
+  let parsed: Record<string, unknown> | null = {};
+  try {
+    const raw = await fs.readFile(accountFile, 'utf8');
+    parsed = parseJsonSafe(raw);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      throw error;
+    }
+  }
+  const email = asText(process.env.ONECEO_E2E_USER_EMAIL) || asText(parsed?.email);
+  const password = asText(process.env.ONECEO_E2E_USER_PASSWORD) || asText(parsed?.password);
   const displayName = asText(parsed?.displayName) || 'OpenCode Direct E2E';
   if (!email || !password) {
-    throw new Error(`invalid direct test account file: ${accountFile}`);
+    throw new Error(
+      `direct test account requires ONECEO_E2E_USER_EMAIL/ONECEO_E2E_USER_PASSWORD or local ignored account file: ${accountFile}`,
+    );
   }
   return { email, password, displayName };
 }

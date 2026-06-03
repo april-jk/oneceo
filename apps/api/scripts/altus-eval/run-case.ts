@@ -42,7 +42,23 @@ function detectOutcome(message: WsMessage): 'completed' | 'failed' | 'waiting_us
 
 async function loginAndGetCookie(apiBase: string): Promise<string> {
   const accountPath = path.resolve(process.cwd(), '../web/e2e/playwright-test-account.json');
-  const account = JSON.parse(await readFile(accountPath, 'utf8'));
+  let parsed: Record<string, unknown> = {};
+  try {
+    parsed = JSON.parse(await readFile(accountPath, 'utf8')) as Record<string, unknown>;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      throw error;
+    }
+  }
+  const account = {
+    email: asText(process.env.ONECEO_E2E_USER_EMAIL) || asText(parsed.email),
+    password: asText(process.env.ONECEO_E2E_USER_PASSWORD) || asText(parsed.password),
+  };
+  if (!account.email || !account.password) {
+    throw new Error(
+      `Altus eval login requires ONECEO_E2E_USER_EMAIL/ONECEO_E2E_USER_PASSWORD or local ignored account file: ${accountPath}`,
+    );
+  }
   const response = await fetch(`${apiBase}/api/auth/login`, {
     method: 'POST',
     headers: {

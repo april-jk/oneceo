@@ -1,10 +1,9 @@
 import { chromium } from '@playwright/test';
-import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { generatedPassword, loadPlaywrightTestAccount } from './test-account.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const TEST_ACCOUNT_FILE = path.resolve(__dirname, 'playwright-test-account.json');
 const WEB_BASE_URL = process.env.ONECEO_WEB_BASE_URL || 'http://127.0.0.1:3000';
 const API_BASE_URL = process.env.ONECEO_API_BASE_URL || 'http://127.0.0.1:4000';
 const PROMPT =
@@ -37,16 +36,10 @@ function asText(value) {
 }
 
 async function loadTestAccount() {
-  const raw = await readFile(TEST_ACCOUNT_FILE, 'utf8');
-  const parsed = JSON.parse(raw);
-  return {
-    email: process.env.ONECEO_E2E_USER_EMAIL || asText(parsed.email) || `oneceo-e2e-${Date.now()}@example.com`,
-    password: process.env.ONECEO_E2E_USER_PASSWORD || asText(parsed.password) || 'OneceoE2E!234',
-    displayName:
-      process.env.ONECEO_E2E_USER_DISPLAY_NAME ||
-      asText(parsed.displayName) ||
-      'Playwright Test User',
-  };
+  return loadPlaywrightTestAccount({
+    fallbackEmail: `oneceo-e2e-${Date.now()}@example.com`,
+    fallbackPassword: generatedPassword(),
+  });
 }
 
 async function apiRequest(path, authCookieHeader, init = {}) {

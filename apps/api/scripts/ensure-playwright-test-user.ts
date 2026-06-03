@@ -14,8 +14,15 @@ function asText(value: unknown) {
 async function loadDefaultAccount() {
   const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
   const filePath = path.join(rootDir, 'apps/web/e2e/playwright-test-account.json');
-  const raw = await readFile(filePath, 'utf8');
-  const parsed = JSON.parse(raw) as Record<string, unknown>;
+  let parsed: Record<string, unknown> = {};
+  try {
+    const raw = await readFile(filePath, 'utf8');
+    parsed = JSON.parse(raw) as Record<string, unknown>;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      throw error;
+    }
+  }
   return {
     filePath,
     email: asText(parsed.email),
@@ -32,7 +39,9 @@ async function main() {
   const displayName = asText(process.env.ONECEO_E2E_USER_DISPLAY_NAME) || defaults.displayName;
 
   if (!email || !password) {
-    throw new Error('playwright_test_user_missing_credentials');
+    throw new Error(
+      'playwright_test_user_missing_credentials: set ONECEO_E2E_USER_EMAIL/ONECEO_E2E_USER_PASSWORD or create local ignored apps/web/e2e/playwright-test-account.json from the example',
+    );
   }
 
   const passwordHash = await hashPassword(password);

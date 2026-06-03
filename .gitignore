@@ -7,6 +7,7 @@ node_modules/
 coverage/
 *.lcov
 apps/web/test-results/
+apps/web/e2e/playwright-test-account.json
 
 # Production
 dist/

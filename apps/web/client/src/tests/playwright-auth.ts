@@ -23,8 +23,15 @@ function asText(value: unknown) {
 }
 
 async function loadTestAccount(): Promise<TestAccount> {
-  const raw = await readFile(TEST_ACCOUNT_FILE, "utf8");
-  const parsed = JSON.parse(raw);
+  let parsed: Partial<TestAccount> = {};
+  try {
+    const raw = await readFile(TEST_ACCOUNT_FILE, "utf8");
+    parsed = JSON.parse(raw) as Partial<TestAccount>;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw error;
+    }
+  }
   const account = {
     email: asText(process.env.ONECEO_E2E_USER_EMAIL) || asText(parsed.email),
     password: asText(process.env.ONECEO_E2E_USER_PASSWORD) || asText(parsed.password),
@@ -35,11 +42,13 @@ async function loadTestAccount(): Promise<TestAccount> {
   };
   if (!account.email || !account.password) {
     throw new Error(
-      "Playwright test account requires ONECEO_E2E_USER_EMAIL and ONECEO_E2E_USER_PASSWORD or a local e2e/playwright-test-account.json override",
+      "Playwright test account requires ONECEO_E2E_USER_EMAIL and ONECEO_E2E_USER_PASSWORD or a local ignored e2e/playwright-test-account.json override copied from playwright-test-account.example.json",
     );
   }
   return account;
 }
+
+export const loadPlaywrightTestAccount = loadTestAccount;
 
 let ensureUserPromise: Promise<void> | null = null;
 

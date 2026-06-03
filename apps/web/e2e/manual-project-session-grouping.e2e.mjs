@@ -1,13 +1,13 @@
 import { chromium } from "@playwright/test";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { loadPlaywrightTestAccount } from "./test-account.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT_DIR = path.resolve(__dirname, "..", "..", "..");
 const WEB_BASE_URL = process.env.ONECEO_WEB_BASE_URL || "http://oneceo.ai:3000";
 const API_BASE_URL = process.env.ONECEO_API_BASE_URL || WEB_BASE_URL;
-const TEST_ACCOUNT_FILE = path.resolve(__dirname, "playwright-test-account.json");
 const REPORT_STAMP = new Date().toISOString().replace(/[:.]/g, "-");
 const REPORT_DIR = path.resolve(
   ROOT_DIR,
@@ -24,13 +24,7 @@ function uniqueSuffix() {
 }
 
 async function loadAccount() {
-  const raw = await readFile(TEST_ACCOUNT_FILE, "utf8");
-  const parsed = JSON.parse(raw);
-  return {
-    email: asText(parsed.email),
-    password: asText(parsed.password),
-    displayName: asText(parsed.displayName) || "Playwright Test User",
-  };
+  return loadPlaywrightTestAccount();
 }
 
 async function loginOrRegister(account) {

@@ -1,11 +1,11 @@
 import { chromium } from '@playwright/test';
-import { readFile, mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { loadPlaywrightTestAccount } from './test-account.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT_DIR = path.resolve(__dirname, '..', '..');
-const TEST_ACCOUNT_FILE = path.resolve(__dirname, 'playwright-test-account.json');
 const WEB_BASE_URL = process.env.ONECEO_WEB_BASE_URL || 'http://oneceo.ai:3000';
 const API_BASE_URL = process.env.ONECEO_API_BASE_URL || WEB_BASE_URL;
 const SESSION_ID =
@@ -37,12 +37,7 @@ function parseJson(text) {
 }
 
 async function loadTestAccount() {
-  const parsed = JSON.parse(await readFile(TEST_ACCOUNT_FILE, 'utf8'));
-  return {
-    email: process.env.ONECEO_E2E_USER_EMAIL || asText(parsed.email),
-    password: process.env.ONECEO_E2E_USER_PASSWORD || asText(parsed.password),
-    displayName: process.env.ONECEO_E2E_USER_DISPLAY_NAME || asText(parsed.displayName),
-  };
+  return loadPlaywrightTestAccount();
 }
 
 function extractAppSessionCookie(response) {

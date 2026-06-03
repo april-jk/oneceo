@@ -53,8 +53,9 @@
 
 ## Playwright 测试账号约定
 
-- 用户态 Playwright 固定测试账号统一存放在 `apps/web/e2e/playwright-test-account.json`。
-- 该文件用于真实业务链路测试（登录、会话创建、部署等），后续测试优先复用，不要随意改名或改路径。
+- 用户态 Playwright 测试账号必须通过环境变量 `ONECEO_E2E_USER_EMAIL` / `ONECEO_E2E_USER_PASSWORD` 提供，或放在本地未跟踪文件 `apps/web/e2e/playwright-test-account.json`。
+- 仓库只跟踪 `apps/web/e2e/playwright-test-account.example.json` 模板，禁止提交真实测试邮箱、密码或固定测试账号凭据。
+- 该本地文件用于真实业务链路测试（登录、会话创建、部署等），后续测试优先复用，不要随意改名或改路径。
 - 如果需要变更测试账号密码，必须同步更新依赖该文件的脚本与测试文档，避免出现“脚本仍用旧密码”的假失败。
 - 如果涉及登录才可以后续的操作，需要复用登录，避免反复多次登录，尽可能确保一次登陆，多次使用。
 

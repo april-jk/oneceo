@@ -209,14 +209,27 @@ function requireCookie(response: Response) {
 }
 
 async function loadTestAccount(): Promise<TestAccount> {
-  const raw = await fs.readFile(TEST_ACCOUNT_PATH, 'utf8');
-  const parsed = JSON.parse(raw) as Record<string, unknown>;
+  let parsed: Record<string, unknown> = {};
+  try {
+    const raw = await fs.readFile(TEST_ACCOUNT_PATH, 'utf8');
+    parsed = JSON.parse(raw) as Record<string, unknown>;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      throw error;
+    }
+  }
   const email = asText(process.env.ONECEO_E2E_USER_EMAIL) || asText(parsed.email);
   const password = asText(process.env.ONECEO_E2E_USER_PASSWORD) || asText(parsed.password);
   const displayName =
     asText(process.env.ONECEO_E2E_USER_DISPLAY_NAME) || asText(parsed.displayName) || 'Playwright Test User';
-  assert.ok(email, 'test account email is required');
-  assert.ok(password, 'test account password is required');
+  assert.ok(
+    email,
+    `test account email is required: set ONECEO_E2E_USER_EMAIL or create local ignored ${TEST_ACCOUNT_PATH}`,
+  );
+  assert.ok(
+    password,
+    `test account password is required: set ONECEO_E2E_USER_PASSWORD or create local ignored ${TEST_ACCOUNT_PATH}`,
+  );
   return {
     email,
     password,

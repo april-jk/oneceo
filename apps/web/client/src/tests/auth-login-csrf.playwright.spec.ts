@@ -1,28 +1,10 @@
 import { expect, test } from "@playwright/test";
-import { readFile } from "node:fs/promises";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { loadPlaywrightTestAccount } from "./playwright-auth";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const TEST_ACCOUNT_FILE = path.resolve(__dirname, "..", "..", "..", "e2e", "playwright-test-account.json");
 const WEB_BASE_URL = process.env.ONECEO_WEB_BASE_URL || "http://oneceo.ai:3000";
 
-type TestAccount = {
-  email: string;
-  password: string;
-};
-
-async function loadTestAccount(): Promise<TestAccount> {
-  const raw = await readFile(TEST_ACCOUNT_FILE, "utf8");
-  const parsed = JSON.parse(raw) as Partial<TestAccount>;
-  return {
-    email: String(parsed.email || "").trim(),
-    password: String(parsed.password || "").trim(),
-  };
-}
-
 test("cross-site form post cannot establish a login session", async ({ browser }) => {
-  const account = await loadTestAccount();
+  const account = await loadPlaywrightTestAccount();
   const context = await browser.newContext();
   const page = await context.newPage();
   const attackPageHtml = `
@@ -58,7 +40,7 @@ test("cross-site form post cannot establish a login session", async ({ browser }
 });
 
 test("cross-site JSON fetch cannot bypass the login boundary", async ({ browser }) => {
-  const account = await loadTestAccount();
+  const account = await loadPlaywrightTestAccount();
   const context = await browser.newContext();
   const page = await context.newPage();
 

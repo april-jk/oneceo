@@ -1,10 +1,6 @@
 import { chromium } from '@playwright/test';
-import { readFile } from 'node:fs/promises';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { loadPlaywrightTestAccount } from './test-account.mjs';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const TEST_ACCOUNT_FILE = path.resolve(__dirname, 'playwright-test-account.json');
 const WEB_BASE_URL = process.env.ONECEO_WEB_BASE_URL || 'http://127.0.0.1:3000';
 const INITIAL_PROMPT = process.env.ONECEO_CONTEXT_E2E_INITIAL_PROMPT || '帮我做一个管理后台系统';
 const CLARIFICATION_ANSWER = process.env.ONECEO_CONTEXT_E2E_CLARIFICATION_ANSWER || '网页应用';
@@ -21,17 +17,8 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function asText(value) {
-  return typeof value === 'string' ? value.trim() : '';
-}
-
 async function loadTestAccount() {
-  const raw = await readFile(TEST_ACCOUNT_FILE, 'utf8');
-  const parsed = JSON.parse(raw);
-  return {
-    email: process.env.ONECEO_E2E_USER_EMAIL || asText(parsed.email),
-    password: process.env.ONECEO_E2E_USER_PASSWORD || asText(parsed.password),
-  };
+  return loadPlaywrightTestAccount();
 }
 
 function countOccurrences(text, needle) {

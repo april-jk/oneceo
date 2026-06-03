@@ -4,6 +4,7 @@ import { promisify } from 'node:util';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { loadPlaywrightTestAccount } from './test-account.mjs';
 
 const execFile = promisify(execFileCb);
 
@@ -20,7 +21,6 @@ const PUBLIC_WAIT_TIMEOUT_MS = Number(process.env.ONECEO_PUBLIC_WAIT_TIMEOUT_MS 
 const POLL_INTERVAL_MS = Number(process.env.ONECEO_E2E_POLL_INTERVAL_MS || 5000);
 const REPORT_STAMP = new Date().toISOString().replace(/[:.]/g, '-');
 const REPORT_DIR = path.resolve(ROOT_DIR, 'web/test-results/website-build-deploy-real-e2e');
-const TEST_ACCOUNT_FILE = path.resolve(ROOT_DIR, 'web/e2e/playwright-test-account.json');
 const UNIQUE_PROMPT = `${PROMPT}\n\n[playwright-e2e:${REPORT_STAMP}]`;
 
 function sleep(ms) {
@@ -64,17 +64,7 @@ async function writeJson(filePath, value) {
 }
 
 async function loadTestAccount() {
-  const raw = await fs.readFile(TEST_ACCOUNT_FILE, 'utf8');
-  const parsed = parseJson(raw);
-  if (!parsed?.email || !parsed?.password) {
-    throw new Error(`invalid test account file: ${TEST_ACCOUNT_FILE}`);
-  }
-  return {
-    email: process.env.ONECEO_E2E_USER_EMAIL || parsed.email,
-    password: process.env.ONECEO_E2E_USER_PASSWORD || parsed.password,
-    displayName: process.env.ONECEO_E2E_USER_DISPLAY_NAME || parsed.displayName || 'Playwright Test User',
-    filePath: TEST_ACCOUNT_FILE,
-  };
+  return loadPlaywrightTestAccount();
 }
 
 async function ensurePlaywrightTestUser(account) {

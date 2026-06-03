@@ -3,6 +3,7 @@ import '../src/config/env';
 import { appUserDAO } from '../src/db/dao';
 import { appAuthService } from '../src/services/app-auth-service';
 import { hashPassword } from '../src/utils/auth-password';
+import { randomUUID } from 'node:crypto';
 
 function asText(value: unknown) {
   return typeof value === 'string' ? value.trim() : '';
@@ -10,7 +11,7 @@ function asText(value: unknown) {
 
 async function main() {
   const email = asText(process.env.ONECEO_E2E_USER_EMAIL) || `oneceo-e2e-${Date.now()}@example.com`;
-  const password = asText(process.env.ONECEO_E2E_USER_PASSWORD) || 'OneceoE2E!234';
+  const password = asText(process.env.ONECEO_E2E_USER_PASSWORD) || `OneceoE2E-${randomUUID()}`;
   const displayName = asText(process.env.ONECEO_E2E_USER_DISPLAY_NAME) || 'OneCEO E2E';
 
   let user = await appUserDAO.getByEmail(email);

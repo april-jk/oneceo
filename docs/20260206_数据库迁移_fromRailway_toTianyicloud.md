@@ -6,7 +6,7 @@
 
 ## 迁移过程
 1. 使用新的连接串：
-   - `DATABASE_URL=postgresql://oneceo_dev_user:***@182.42.66.5:25172/oneceo_dev`
+   - `DATABASE_URL=postgresql://<user>:***@<db-host>:<port>/<database>`
    - `DATABASE_SSL=disable`
 2. 执行迁移脚本创建表结构：
    - `task_creation_sessions`

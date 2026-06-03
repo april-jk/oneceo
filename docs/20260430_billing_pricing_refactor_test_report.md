@@ -25,7 +25,7 @@
 | 管理后台前端 | http://localhost:5174 |
 | 管理后台API | http://localhost:9310 |
 | 数据库 | postgresql://postgres:postgres@127.0.0.1:5432/oneceo_local |
-| 内部Token | oneceo-internal-dev-token |
+| 内部Token | `__SET_ME__` |
 | Admin账号 | admin66 / `ONECEO_ADMIN_BOOTSTRAP_PASSWORD` |
 
 ---

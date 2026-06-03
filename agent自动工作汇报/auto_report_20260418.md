@@ -123,7 +123,7 @@
   - 在下一轮回归中优先复用这次已修复的 E2E 脚本，目标是拿到“完整脚本 0 退出码”，而不是重新验证已经成功的业务主链。
 
 - 做了什么：
-  - 复核了 API 实际加载的数据库环境，确认当前 `apps/.env` 仍指向远程 PostgreSQL `182.42.66.5:25172`，并非本机。
+  - 复核了 API 实际加载的数据库环境，确认当前 `apps/.env` 仍指向远程 PostgreSQL（地址已脱敏），并非本机。
   - 已将 `DATABASE_URL` 改为本地 `postgresql://postgres:postgres@127.0.0.1:5432/oneceo_dev?sslmode=disable`，保持 `DATABASE_SSL=disable`，让 API 显式走本机 `localhost`。
   - 检查本机 Postgres 后发现原先不存在 `oneceo_dev`，已创建该数据库并执行 `pnpm --filter api run db:init`，成功完成 schema 初始化。
   - 再次验证环境加载结果，确认 API 现在从 `apps/.env` 读取的就是本地 `127.0.0.1` 数据库地址；并确认 `public` schema 已有 45 张表。

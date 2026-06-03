@@ -129,7 +129,7 @@
 
 #### 连接器
 - `CONNECTOR_SECRET_KEY` = `__REDACTED__`
-- `ONECEO_INTERNAL_TOKEN` = `oneceo-internal-dev-token`
+- `ONECEO_INTERNAL_TOKEN` = `__SET_ME__`
 - `COMPOSIO_API_KEY` = `__REDACTED__`
 
 #### Vercel 连接器
@@ -200,7 +200,7 @@
 
 #### 环境变量
 - `ONECEO_API_URL` = `http://oneceo-api.railway.internal:4000`（自动注入）
-- `ONECEO_INTERNAL_TOKEN` = `oneceo-internal-dev-token`
+- `ONECEO_INTERNAL_TOKEN` = `__SET_ME__`
 - `ADMIN_MANAGEMENT_CORS_ORIGIN` = `https://oneceo-admin-staging.up.railway.app`（⚠️ staging 特有）
 - `ADMIN_MANAGEMENT_CORS_ORIGINS` = `https://oneceo-admin-staging.up.railway.app`（⚠️ staging 特有）
 - `ADMIN_MANAGEMENT_THEME` = `rose-pine`

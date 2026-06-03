@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "description": "AI Agent 项目管理平台 - 支持项目-经理-员工三层级智能调度",
+  "license": "MIT",
   "scripts": {
     "dev": "pnpm --filter web dev & pnpm --filter api dev",
     "dev:web": "pnpm --filter web dev",

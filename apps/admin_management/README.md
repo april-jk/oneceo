@@ -1,11 +1,8 @@
-# oneceo admin_management
+# OneCEO Admin Management
 
-独立后台管理系统（当前目录内独立运行），用于可视化管理 `kvm-orchestrator`：
+`apps/admin_management` is the platform-operator console for OneCEO. It is not just a legacy KVM panel: the current role of this app is governance and operations across sessions, sandboxes, deployments, connectors, OSAC, audit views, and related admin-only workflows.
 
-- KVM 虚拟机开关机与状态查看
-- KVM 宿主机状态与容量管理
-- 运行状态图表（VM 状态分布、宿主机负载、会话状态）
-- 审计日志（开关机操作记录）
+For repository-level onboarding, required environment variables, screenshots, and OSS collaboration files, start with the root [README.md](/Users/watson/codingProj/oneceo/README.md).
 
 ## 1. 环境准备
 
@@ -58,14 +55,18 @@ VITE_OSAC_UPLOAD_TIMEOUT_MS=300000
 npm run dev
 ```
 
-`npm run dev` 会直接从 `../.env` 读取环境变量，并同时启动后端和前端（可直接进入管理功能）。
+`npm run dev` 会直接从 `../.env` 读取环境变量，并同时启动后端和前端。
 
 默认端口：
 
 - Web: `http://localhost:5174` 或 `http://你的局域网IP:5174`
 - API: `http://localhost:9310` 或 `http://你的局域网IP:9310`
 
-> 请确保 `KVM_ORCHESTRATOR_URL` 指向可访问的服务（默认 `http://localhost:8500`）。
+本地联调时通常还需要保证：
+
+- 根目录 `apps/.env` 已正确配置
+- `ONECEO_INTERNAL_TOKEN` 与 API 侧一致
+- `ONECEO_API_URL` 或默认 API 目标可访问
 
 ## 3. 构建与类型检查
 
@@ -103,3 +104,10 @@ admin_management/
   .env.example
   package.json
 ```
+
+## 6. 相关文档
+
+- [README.md](/Users/watson/codingProj/oneceo/README.md)
+- [AGENTS.md](/Users/watson/codingProj/oneceo/AGENTS.md)
+- [PRODUCT.md](/Users/watson/codingProj/oneceo/PRODUCT.md)
+- [DESIGN.md](/Users/watson/codingProj/oneceo/DESIGN.md)

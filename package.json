@@ -2,7 +2,7 @@
   "name": "oneceo",
   "version": "0.1.0",
   "private": true,
-  "description": "AI Agent 项目管理平台 - 支持项目-经理-员工三层级智能调度",
+  "description": "AI task execution and platform-governance workspace with a user cockpit, orchestration API, admin console, and E2B-based runtime flows",
   "license": "MIT",
   "scripts": {
     "dev": "pnpm --filter web dev & pnpm --filter api dev",

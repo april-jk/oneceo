@@ -1,237 +1,272 @@
-# oneceo.ai - AI Agent 项目管理平台
+# OneCEO
 
-一个基于 AI Agent 的智能项目管理平台，支持项目-经理-员工三层级智能调度系统。
+OneCEO is an AI task execution and platform-governance workspace for teams that need more than a chat box. It combines a user-facing task cockpit, an orchestration API, an administrator console, and sandbox/runtime infrastructure around E2B, OSAC, and hosted connectors.
 
-## 项目简介
+The product is designed as a "task command center": operators can create and review agent work, administrators can inspect sessions, sandboxes, deployments, connectors, and audit traces, and the platform keeps the execution chain observable instead of hiding it behind a single prompt box.
 
-oneceo.ai 是一个创新的项目管理平台，通过 AI Agent 技术实现智能化的项目规划、任务分配和执行管理。系统采用三层级架构：
+![OneCEO logo](apps/web/client/public/logo.png)
 
-**CEO Agent（总经理）**：负责项目规划、资源分配和战略决策  
-**Manager Agent（项目经理）**：负责任务分解、团队管理和进度跟踪  
-**Employee Agent（员工）**：负责具体任务执行和交付
+## What is in this repository
 
-## 项目结构
+- `apps/web`: end-user workspace for task creation, chat, deliverables, previews, and deployment flows
+- `apps/api`: orchestration API for task sessions, Altus-managed flows, OSAC, connectors, archives, and sandbox lifecycle
+- `apps/admin_management`: administrator console for governance, operations, audit, deployments, connectors, OSAC, and sandbox visibility
+- `apps/blog`: documentation/blog site
+- `packages/shared`: shared types and utilities
+- `e2b_templates`: E2B sandbox templates and related assets
+- `docs`: architecture, feature, testing, and deployment documents
 
-```
-oneceo/
-├── apps/
-│   ├── web/          # 前端应用（React + Vite + Tailwind CSS）
-│   └── api/          # 后端 API（Express + Socket.io + BullMQ）
-├── packages/
-│   ├── shared/       # 共享类型定义和工具函数
-│   ├── database/     # 数据库 Schema 和迁移（Prisma）
-│   └── config/       # 共享配置文件
-├── docs/             # 项目文档
-│   ├── api/         # API 文档
-│   ├── architecture/# 架构设计文档
-│   └── development/ # 开发指南
-└── scripts/          # 构建和部署脚本
-```
+## Feature overview
 
-## 快速开始
+- Agent task execution with persistent task-session orchestration
+- E2B-based execution environments routed through the OneCEO API
+- Hosted connector flows, including Composio OAuth-based integrations
+- Admin-side audit and trace views for requests, tools, and runtime state
+- Deployment and environment management surfaces for operators
+- Multi-app workspace with separate end-user and administrator experiences
 
-### 环境要求
+## Product surfaces
 
-- **Node.js**: 18.0 或更高版本
-- **pnpm**: 8.0 或更高版本
-- **PostgreSQL**: 14 或更高版本（可选，用于数据持久化）
-- **Redis**: 7 或更高版本（可选，用于任务队列）
+### User workspace
 
-### 安装依赖
+The main web app is where users create tasks, collaborate with agents, inspect deliverables, and move work toward deployment.
+
+![User workspace](oneceo-home-send.png)
+
+### API trace and runtime visibility
+
+The API app includes tracing and audit-oriented surfaces so operators can review requests and execution details instead of treating agent behavior as opaque.
+
+![API traces](screenshot_api_traces.png)
+
+### Administrator command center
+
+The admin console is built for platform operators who need dense oversight of sandboxes, OSAC, connectors, deployments, and other operational entities.
+
+![Admin command center](agent自动工作汇报/admin_detail_command_center_20260426/osac-command-center.png)
+
+## Quick start
+
+### Requirements
+
+- Node.js `20+`
+- pnpm `10.4.1+`
+- npm `10+`
+- PostgreSQL for the API
+- Redis only if you explicitly enable it with `ONECEO_REDIS_ENABLED=true`
+
+### Install
 
 ```bash
-# 克隆仓库
 git clone https://github.com/april-jk/oneceo.git
 cd oneceo
-
-# 安装所有依赖
-pnpm install
-
-# 构建共享包
-pnpm --filter @oneceo/shared build
+pnpm install --frozen-lockfile
+npm --prefix apps/admin_management install
+cp apps/.env.example apps/.env
 ```
 
-### 开发模式
+`apps/admin_management` currently keeps its own `npm` dependency tree, so the extra install step is required.
 
-```bash
-# 同时启动前端和后端开发服务器
-pnpm dev
+### Minimum local configuration
 
-# 或者分别启动
-pnpm dev:web    # 前端：http://localhost:3000
-pnpm dev:api    # 后端：http://localhost:4000
+The canonical environment template is [apps/.env.example](/Users/watson/codingProj/oneceo/apps/.env.example). For a first local boot, fill at least these values in `apps/.env`:
+
+| Variable | Required for | Example |
+| --- | --- | --- |
+| `PORT` | API local port | `4000` |
+| `FRONTEND_URL` | Browser origin and OAuth callback base fallback | `http://localhost:3000` |
+| `ONECEO_API_PUBLIC_URL` | Public API origin for browser-side checks | `http://localhost:3000` |
+| `DATABASE_URL` | API boot and persistence | `postgresql://postgres:postgres@127.0.0.1:5432/oneceo?sslmode=disable` |
+| `VITE_API_BASE_URL` | Web app requests to API | `http://127.0.0.1:4000` |
+| `WEB_BFF_API_TARGET` | Web dev proxy target | `http://localhost:4000` |
+| `ONECEO_INTERNAL_TOKEN` | Shared internal auth between apps | `replace-with-a-long-random-string` |
+| `OPENAI_API_KEY` | Upstream model access | `sk-your-provider-key` |
+| `OPENAI_BASE_URL` | OpenAI-compatible endpoint | `https://api.openai.com/v1` |
+| `LLM_PROXY_UPSTREAM_API_KEY` | API-side LLM proxy | `sk-your-provider-key` |
+| `LLM_PROXY_UPSTREAM_BASE_URL` | API-side LLM proxy endpoint | `https://api.openai.com/v1` |
+
+### Sandbox, connector, and archive configuration
+
+These are not required for a bare UI/API boot, but they are required if you want the platform's core execution flows to work end to end:
+
+| Variable | Needed when | Example |
+| --- | --- | --- |
+| `E2B_API_KEY` | Running real E2B sandboxes | `e2b_your_api_key` |
+| `COMPOSIO_API_KEY` | Enabling Composio-hosted connectors | `cmp_your_api_key` |
+| `COMPOSIO_OAUTH_CALLBACK_BASE_URL` | Completing connector OAuth flows | `http://localhost:3000` |
+| `CONNECTOR_SECRET_KEY` | Encrypting connector-side secrets | `replace-with-a-long-random-string` |
+| `R2_BUCKET_NAME` | Sandbox archive storage | `oneceo-sandbox-storage` |
+| `R2_ACCOUNT_ID` | Sandbox archive storage | `your-cloudflare-account-id` |
+| `R2_ENDPOINT` | Sandbox archive storage | `https://<account-id>.r2.cloudflarestorage.com` |
+| `R2_ACCESS_KEY_ID` | Sandbox archive storage | `your-r2-access-key` |
+| `R2_SECRET_ACCESS_KEY` | Sandbox archive storage | `your-r2-secret-key` |
+
+### Safe example `.env`
+
+Use placeholders only. Never commit real secrets.
+
+```env
+PORT=4000
+FRONTEND_URL=http://localhost:3000
+ONECEO_API_PUBLIC_URL=http://localhost:3000
+
+DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/oneceo?sslmode=disable
+DATABASE_SSL=disable
+
+ONECEO_REDIS_ENABLED=false
+REDIS_URL=
+
+VITE_API_BASE_URL=http://127.0.0.1:4000
+VITE_RUNTIME_ENV=dev
+WEB_BFF_API_TARGET=http://localhost:4000
+
+ONECEO_INTERNAL_TOKEN=replace-with-a-long-random-string
+CONNECTOR_SECRET_KEY=replace-with-a-second-long-random-string
+
+OPENAI_API_KEY=sk-your-provider-key
+OPENAI_BASE_URL=https://api.openai.com/v1
+LLM_PROXY_UPSTREAM_API_KEY=sk-your-provider-key
+LLM_PROXY_UPSTREAM_BASE_URL=https://api.openai.com/v1
+LLM_PROXY_UPSTREAM_API_TYPE=openai
+
+E2B_API_KEY=e2b_your_api_key
+COMPOSIO_API_KEY=cmp_your_api_key
+COMPOSIO_OAUTH_CALLBACK_BASE_URL=http://localhost:3000
+
+R2_BUCKET_NAME=your-r2-bucket
+R2_ACCOUNT_ID=your-cloudflare-account-id
+R2_ENDPOINT=https://your-account-id.r2.cloudflarestorage.com
+R2_ACCESS_KEY_ID=your-r2-access-key
+R2_SECRET_ACCESS_KEY=your-r2-secret-key
 ```
 
-### 生产构建
+## How to get the required keys
+
+### E2B
+
+- Create an account in the E2B dashboard.
+- Generate an API key for your workspace.
+- Put that value in `E2B_API_KEY`.
+- If you enable long-lived archive/recovery flows, also configure the R2 variables shown above.
+
+Relevant architecture notes:
+- [docs/AGENTS_GUIDE/03_sandbox_e2b.md](/Users/watson/codingProj/oneceo/docs/AGENTS_GUIDE/03_sandbox_e2b.md)
+- [apps/api/src/connectors/e2b-connector.ts](/Users/watson/codingProj/oneceo/apps/api/src/connectors/e2b-connector.ts)
+
+### Composio
+
+- Create a project and API key in the Composio dashboard.
+- Put that value in `COMPOSIO_API_KEY`.
+- Set `COMPOSIO_OAUTH_CALLBACK_BASE_URL` to the real frontend origin that users open in the browser.
+- For local development, that usually means `http://localhost:3000`.
+- Do not point the callback base URL at an internal API hostname or a private Railway hostname.
+
+Relevant design notes:
+- [docs/features/connectors/composio_oauth_callback_env_control_doc_[20260503-1127已采用].md](/Users/watson/codingProj/oneceo/docs/features/connectors/composio_oauth_callback_env_control_doc_[20260503-1127已采用].md)
+
+### OpenAI-compatible model provider
+
+- Bring your own provider key for the model backend you want to use.
+- Set both browser-facing and API-side values if you want the entire stack to behave consistently:
+  - `OPENAI_API_KEY`
+  - `OPENAI_BASE_URL`
+  - `LLM_PROXY_UPSTREAM_API_KEY`
+  - `LLM_PROXY_UPSTREAM_BASE_URL`
+- If your upstream is not plain OpenAI, set `LLM_PROXY_UPSTREAM_API_TYPE` accordingly.
+
+### Cloudflare R2
+
+- Create an R2 bucket in Cloudflare if you want sandbox archive storage.
+- Generate an access key pair scoped to that bucket.
+- Fill `R2_BUCKET_NAME`, `R2_ACCOUNT_ID`, `R2_ENDPOINT`, `R2_ACCESS_KEY_ID`, and `R2_SECRET_ACCESS_KEY`.
+
+### Deployment credentials
+
+Deployment-related variables in `apps/.env.example` are only needed if you use the managed deployment flows:
+
+- `RAILWAY_ADMIN_TOKEN`
+- `RAILWAY_WORKSPACE_ID`
+- `GITHUB_DEPLOYMENT_APP_ID`
+- `GITHUB_DEPLOYMENT_INSTALLATION_ID`
+- `GITHUB_DEPLOYMENT_APP_PRIVATE_KEY`
+
+These should come from your Railway workspace and your GitHub App configuration, not from sample values in this repository.
+
+## Running the apps
+
+### API
 
 ```bash
-# 构建所有应用
+pnpm dev:api
+```
+
+### User workspace
+
+```bash
+pnpm dev:web
+```
+
+### Blog/docs site
+
+```bash
+pnpm dev:blog
+```
+
+### Admin console
+
+```bash
+npm --prefix apps/admin_management run dev
+```
+
+## Verification
+
+If you are checking whether the repository is usable after cloning, start with the same minimum static checks used for OSS readiness:
+
+```bash
+pnpm --filter api type-check
+pnpm --filter web check
+npm --prefix apps/admin_management run type-check
+```
+
+Additional common commands:
+
+```bash
 pnpm build
-
-# 或者分别构建
-pnpm build:web
-pnpm build:api
+pnpm type-check
+pnpm test
 ```
 
-## 技术栈
+## Architecture notes
 
-### 前端技术栈
+- `apps/api` is the main entry for task sessions, Altus-managed flows, OSAC, connector orchestration, archive/recovery, and sandbox lifecycle.
+- `apps/web` is the main end-user surface.
+- `apps/admin_management` is the platform operator surface.
+- `apps/api/src/connectors/e2b-connector.ts` is the required E2B main-chain entry.
+- `apps/api/src/connectors/llm-proxy-connector.ts` is the required upstream model access entry.
+- User/admin identity separation is part of the system boundary, not a UI detail.
 
-| 技术 | 版本 | 用途 |
-|-----|------|------|
-| React | 19.2.1 | UI 框架 |
-| TypeScript | 5.6.3 | 类型系统 |
-| Tailwind CSS | 4.1.14 | 样式框架 |
-| Vite | 7.1.7 | 构建工具 |
-| Wouter | 3.3.5 | 路由管理 |
-| Framer Motion | 12.23.22 | 动画库 |
-| Radix UI | - | UI 组件库 |
-| Socket.io Client | - | 实时通信 |
+## Documentation index
 
-### 后端技术栈
+Start here if you want the operating and architecture context behind the repo:
 
-| 技术 | 版本 | 用途 |
-|-----|------|------|
-| Node.js | 18+ | 运行时环境 |
-| Express | 4.21.2 | Web 框架 |
-| TypeScript | 5.6.3 | 类型系统 |
-| Socket.io | 4.8.1 | WebSocket 服务 |
-| BullMQ | 5.36.3 | 任务队列 |
-| Prisma | 6.5.0 | ORM |
-| PostgreSQL | 14+ | 关系数据库 |
-| Redis | 7+ | 缓存和队列 |
+- [AGENTS.md](/Users/watson/codingProj/oneceo/AGENTS.md)
+- [PRODUCT.md](/Users/watson/codingProj/oneceo/PRODUCT.md)
+- [DESIGN.md](/Users/watson/codingProj/oneceo/DESIGN.md)
+- [docs/AGENTS_GUIDE/PROJECT_PROMPT.md](/Users/watson/codingProj/oneceo/docs/AGENTS_GUIDE/PROJECT_PROMPT.md)
+- [docs/AGENTS_GUIDE/02_services.md](/Users/watson/codingProj/oneceo/docs/AGENTS_GUIDE/02_services.md)
+- [docs/AGENTS_GUIDE/03_sandbox_e2b.md](/Users/watson/codingProj/oneceo/docs/AGENTS_GUIDE/03_sandbox_e2b.md)
+- [docs/AGENTS_GUIDE/04_agent_flow.md](/Users/watson/codingProj/oneceo/docs/AGENTS_GUIDE/04_agent_flow.md)
+- [docs/AGENTS_GUIDE/05_系统调试与测试指南.md](/Users/watson/codingProj/oneceo/docs/AGENTS_GUIDE/05_系统调试与测试指南.md)
+- [docs/AGENTS_GUIDE/AGENT_CODE_MODIFICATION_GUIDE.md](/Users/watson/codingProj/oneceo/docs/AGENTS_GUIDE/AGENT_CODE_MODIFICATION_GUIDE.md)
+- [docs/features/20260603_开源发布仓库整理_[20260603-2358已采用].md](/Users/watson/codingProj/oneceo/docs/features/20260603_开源发布仓库整理_[20260603-2358已采用].md)
 
-## 核心功能
+## Open-source collaboration
 
-### 已实现功能
+- Contribution guide: [CONTRIBUTING.md](/Users/watson/codingProj/oneceo/CONTRIBUTING.md)
+- Code of conduct: [CODE_OF_CONDUCT.md](/Users/watson/codingProj/oneceo/CODE_OF_CONDUCT.md)
+- Security reporting: [SECURITY.md](/Users/watson/codingProj/oneceo/SECURITY.md)
+- Support: [SUPPORT.md](/Users/watson/codingProj/oneceo/SUPPORT.md)
 
-- ✅ **项目管理系统**：项目-经理-员工三层级管理架构
-- ✅ **总经理视图**：统计数据展示和 AI 对话界面
-- ✅ **任务详情页面**：对话式任务管理界面
-- ✅ **用户系统**：用户信息、积分和会员状态管理
-- ✅ **响应式设计**：支持桌面端和移动端
-- ✅ **实时通信**：WebSocket 基础架构
-- ✅ **类型共享**：前后端共享 TypeScript 类型定义
+## License
 
-### 开发中功能
-
-- 🚧 **AI Agent 调度系统**：CEO/Manager/Employee Agent 智能调度
-- 🚧 **LLM 集成**：OpenAI GPT-4 / Anthropic Claude 集成
-- 🚧 **任务队列系统**：基于 BullMQ 的异步任务处理
-- 🚧 **数据持久化**：Prisma + PostgreSQL 数据库集成
-- 🚧 **用户认证系统**：JWT 身份验证和权限管理
-- 🚧 **文件上传功能**：支持附件上传和管理
-
-### 计划中功能
-
-- 📋 **实时协作**：多用户实时协作编辑
-- 📋 **通知系统**：任务提醒和进度通知
-- 📋 **数据分析**：项目数据可视化和报表
-- 📋 **API 文档**：自动生成的 API 文档
-- 📋 **单元测试**：完整的测试覆盖
-- 📋 **CI/CD**：自动化测试和部署
-
-## 开发指南
-
-### 添加新的 API 端点
-
-在 `apps/api/src/index.ts` 中添加新的路由：
-
-```typescript
-app.get('/api/your-endpoint', (req, res) => {
-  res.json({ success: true, data: {} });
-});
-```
-
-### 添加新的共享类型
-
-在 `packages/shared/src/types/index.ts` 中定义类型：
-
-```typescript
-export interface YourType {
-  id: string;
-  name: string;
-}
-```
-
-然后在前端或后端导入使用：
-
-```typescript
-import type { YourType } from '@oneceo/shared';
-```
-
-### 前端使用共享类型
-
-在 `apps/web` 中导入共享类型：
-
-```typescript
-import type { Project, Task, Message } from '@oneceo/shared';
-```
-
-## 配置说明
-
-### 环境变量
-
-复制 `apps/api/.env.example` 到 `apps/api/.env` 并填写配置：
-
-```bash
-cp apps/api/.env.example apps/api/.env
-```
-
-主要配置项：
-
-- `PORT`: API 服务器端口（默认 4000）
-- `FRONTEND_URL`: 前端应用 URL（用于 CORS）
-- `DATABASE_URL`: PostgreSQL 连接字符串
-- `REDIS_URL`: Redis 连接字符串
-- `OPENAI_API_KEY`: OpenAI API 密钥
-
-## 部署指南
-
-### 使用 Docker（推荐）
-
-```bash
-# 构建镜像
-docker-compose build
-
-# 启动服务
-docker-compose up -d
-```
-
-### 手动部署
-
-```bash
-# 构建应用
-pnpm build
-
-# 启动前端（静态文件服务）
-cd apps/web/dist && npx serve -s
-
-# 启动后端
-cd apps/api && node dist/index.js
-```
-
-## 贡献指南
-
-欢迎贡献代码！请遵循以下步骤：
-
-1. Fork 本仓库
-2. 创建特性分支：`git checkout -b feature/your-feature`
-3. 提交更改：`git commit -m 'Add some feature'`
-4. 推送到分支：`git push origin feature/your-feature`
-5. 提交 Pull Request
-
-## 许可证
-
-本项目采用 MIT 许可证。详见 [LICENSE](LICENSE) 文件。
-
-## 联系方式
-
-- **GitHub**: https://github.com/april-jk/oneceo
-- **Issues**: https://github.com/april-jk/oneceo/issues
-
----
-
-**开发状态**: 🚧 活跃开发中  
-**版本**: 1.0.0  
-**最后更新**: 2026-02-03
+This repository is released under the MIT license. See [LICENSE](/Users/watson/codingProj/oneceo/LICENSE).

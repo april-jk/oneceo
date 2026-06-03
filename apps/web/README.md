@@ -1,71 +1,48 @@
-# oneceo.ai - AI Agent 项目管理平台
+# OneCEO Web App
 
-一个高还原度的 AI Agent 项目管理平台，支持总经理视图、项目管理、任务分配、员工管理等核心功能。
+`apps/web` is the end-user workspace for OneCEO. It hosts the task cockpit where users create work, chat with agents, inspect deliverables, preview runtime output, and move completed work toward deployment.
 
-## 快速开始
+For the repository-level quick start, environment variables, screenshots, and governance documents, start with the root [README.md](/Users/watson/codingProj/oneceo/README.md).
 
-### 环境要求
+## Local development
 
-- Node.js 18.0+
-- pnpm 8.0+
+Requirements:
 
-### 安装
+- Node.js `20+`
+- pnpm `10.4.1+`
+- Root workspace dependencies already installed with `pnpm install --frozen-lockfile`
+
+Start the web app:
 
 ```bash
-# 安装依赖
-pnpm install
-
-# 启动开发服务器
-pnpm dev
-
-# 构建生产版本
-pnpm build
-
-# 启动生产服务器
-pnpm start
+pnpm --filter web dev
 ```
 
-### 访问应用
+By default the app expects the shared environment file at [apps/.env.example](/Users/watson/codingProj/oneceo/apps/.env.example) to be copied to `apps/.env`, with at least these values configured:
 
-开发模式：http://localhost:3000
+- `FRONTEND_URL`
+- `VITE_API_BASE_URL`
+- `WEB_BFF_API_TARGET`
+- `VITE_RUNTIME_ENV`
 
-## 技术栈
+## Common commands
 
-- **前端框架**: React 19 + TypeScript
-- **样式方案**: Tailwind CSS 4
-- **路由管理**: Wouter
-- **动画库**: Framer Motion
-- **UI 组件**: Radix UI
-- **构建工具**: Vite 7
-
-## 核心功能
-
-- ✅ 项目管理系统（项目-经理-员工三层级）
-- ✅ 总经理视图（统计数据 + AI 对话）
-- ✅ 任务详情页面（对话式布局）
-- ✅ 用户菜单系统（用户信息 + 积分状态）
-- ✅ 统一的输入框设计
-- ✅ 响应式布局
-- ✅ 可折叠侧边栏
-
-## 项目结构
-
-```
-├── client/          # 前端代码
-│   ├── public/     # 静态资源
-│   └── src/        # 源代码
-│       ├── components/  # 可复用组件
-│       ├── pages/      # 页面组件
-│       └── lib/        # 工具函数
-├── server/         # 后端代码
-├── shared/         # 共享类型
-└── package.json    # 项目配置
+```bash
+pnpm --filter web dev
+pnpm --filter web build
+pnpm --filter web check
+pnpm --filter web preview
 ```
 
-## 文档
+## Role in the architecture
 
-详细的技术文档和部署指南请参考 `oneceo-platform-delivery.md`
+- Browser-facing user workspace
+- Talks to the API app for task sessions, auth, connectors, and runtime state
+- Uses the root environment template rather than a separate per-app `.env.example`
 
-## 许可证
+## Related docs
 
-MIT License
+- [README.md](/Users/watson/codingProj/oneceo/README.md)
+- [AGENTS.md](/Users/watson/codingProj/oneceo/AGENTS.md)
+- [PRODUCT.md](/Users/watson/codingProj/oneceo/PRODUCT.md)
+- [DESIGN.md](/Users/watson/codingProj/oneceo/DESIGN.md)

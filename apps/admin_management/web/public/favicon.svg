@@ -1,11 +1,7 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <defs>
-    <linearGradient id="g" x1="0%" x2="100%" y1="0%" y2="100%">
-      <stop offset="0%" stop-color="#0f766e" />
-      <stop offset="100%" stop-color="#1d4ed8" />
-    </linearGradient>
-  </defs>
-  <rect width="64" height="64" rx="16" fill="#e6f4f1" />
-  <path d="M16 20h12c12 0 20 8 20 20S40 60 28 60H16z" fill="url(#g)" transform="translate(0 -8)" />
-  <path d="M26 20h22v8H26zm0 16h18v8H26z" fill="#0f172a" opacity=".88" />
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" fill="none">
+  <path d="M296 530C271 570 268 623 305 655C365 706 487 710 610 688C733 666 844 619 904 556C945 512 953 464 927 427C888 373 793 362 682 380C559 401 430 465 296 530Z" stroke="#132f67" stroke-width="15" stroke-linecap="round" stroke-linejoin="round" fill="none" />
+  <line x1="416" y1="602" x2="556" y2="206" stroke="#132f67" stroke-width="22" stroke-linecap="round" />
+  <path d="M549 198L579 198L756 621L724 633L549 198Z" fill="#132f67" />
+  <path d="M528 343C535 362 539 366 557 371C539 376 535 380 528 399C522 380 518 376 500 371C518 366 522 362 528 343Z" fill="#f5b238" />
+  <circle cx="529" cy="438" r="8" fill="#132f67" />
 </svg>

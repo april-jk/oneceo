@@ -7084,7 +7084,7 @@ export default function App() {
         <div className="admin-auth-layout admin-auth-layout-loading admin-auth-layout-single">
           <section className="admin-auth-card admin-auth-loading-card" aria-live="polite">
             <div className="admin-auth-brand">
-              <span className="admin-auth-brand-mark" aria-hidden="true"><img src="/favicon.svg" alt="" /></span>
+              <span className="admin-auth-brand-mark" aria-hidden="true"><img src="/favicon.png" alt="" /></span>
               <div><strong>ONECEO</strong><span>管理控制台</span></div>
             </div>
             <p className="eyebrow">管理员会话</p>
@@ -7104,7 +7104,7 @@ export default function App() {
         <div className="admin-auth-layout admin-auth-layout-single">
           <section className="admin-auth-card">
             <div className="admin-auth-brand">
-              <span className="admin-auth-brand-mark" aria-hidden="true"><img src="/favicon.svg" alt="" /></span>
+              <span className="admin-auth-brand-mark" aria-hidden="true"><img src="/favicon.png" alt="" /></span>
               <div><strong>ONECEO</strong><span>管理控制台</span></div>
             </div>
             <div className="admin-auth-card-head">

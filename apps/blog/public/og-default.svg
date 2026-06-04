@@ -1,8 +1,29 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" fill="none">
   <rect width="1200" height="630" fill="#F6F8FB"/>
-  <rect x="84" y="84" width="1032" height="462" rx="28" fill="#FFFFFF" stroke="#D0D7DE"/>
-  <rect x="132" y="132" width="88" height="88" rx="18" fill="#0969DA"/>
-  <text x="176" y="188" text-anchor="middle" font-family="IBM Plex Sans, Arial, sans-serif" font-size="42" font-weight="700" fill="#FFFFFF">M</text>
-  <text x="132" y="300" font-family="IBM Plex Sans, Arial, sans-serif" font-size="54" font-weight="700" fill="#1F2328">oneceo blog</text>
-  <text x="132" y="356" font-family="IBM Plex Sans, Arial, sans-serif" font-size="28" fill="#57606A">Workflows, guides, and AI execution content</text>
+  <rect x="64" y="64" width="1072" height="502" rx="34" fill="#FFFFFF" stroke="#D0D7DE"/>
+  <rect x="112" y="112" width="976" height="406" rx="28" fill="url(#panel)"/>
+  <defs>
+    <linearGradient id="panel" x1="112" y1="112" x2="1088" y2="518" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#F7F9FC"/>
+    </linearGradient>
+  </defs>
+
+  <g transform="translate(170 118) scale(0.29)">
+    <path d="M296 530C271 570 268 623 305 655C365 706 487 710 610 688C733 666 844 619 904 556C945 512 953 464 927 427C888 373 793 362 682 380C559 401 430 465 296 530Z" stroke="#132f67" stroke-width="15" stroke-linecap="round" stroke-linejoin="round" fill="none" />
+    <line x1="416" y1="602" x2="556" y2="206" stroke="#132f67" stroke-width="22" stroke-linecap="round" />
+    <path d="M549 198L579 198L756 621L724 633L549 198Z" fill="#132f67" />
+    <path d="M528 343C535 362 539 366 557 371C539 376 535 380 528 399C522 380 518 376 500 371C518 366 522 362 528 343Z" fill="#f5b238" />
+    <circle cx="529" cy="438" r="8" fill="#132f67" />
+  </g>
+
+  <text x="450" y="248" fill="#132f67" font-family="IBM Plex Sans, Avenir Next, Arial, sans-serif" font-size="72" font-weight="700">oneceo blog</text>
+  <text x="450" y="312" fill="#57606A" font-family="IBM Plex Sans, Arial, sans-serif" font-size="30">Docs, workflows, and product notes for the OneCEO platform</text>
+
+  <rect x="450" y="370" width="220" height="38" rx="19" fill="#EAF2FE"/>
+  <text x="560" y="395" text-anchor="middle" fill="#0969DA" font-family="IBM Plex Sans, Arial, sans-serif" font-size="19" font-weight="700">TASK COMMAND CENTER</text>
+
+  <rect x="450" y="436" width="264" height="22" rx="11" fill="#DCE7F8"/>
+  <rect x="450" y="472" width="412" height="22" rx="11" fill="#E9EFF8"/>
+  <rect x="450" y="508" width="352" height="22" rx="11" fill="#EEF3F9"/>
 </svg>

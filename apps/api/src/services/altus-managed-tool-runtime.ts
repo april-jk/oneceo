@@ -36,6 +36,17 @@ import {
   type ManagedMcpProvider,
   type ManagedSkillContext,
 } from './altus-managed-shared';
+import {
+  generateDebugTodo,
+  saveDebugTodo,
+  formatDebugTodo,
+  buildDocQuerySummary,
+  linkDebugTodoBrowserEvidence,
+  resolveActiveDebugTodoItemId,
+  type DebugTodoItem,
+  type DebugTodo,
+  type DebugTodoLink,
+} from './debug-todo-service';
 import type { AltusManagedTaskIntentProfile } from './altus-managed-prompt-service';
 import type { TaskClarificationType } from './task-intent-shape-service';
 import {
@@ -51,6 +62,7 @@ export type ManagedToolResult =
       activatedSkills?: ManagedSkillContext[];
       evidence?: ManagedToolEvidence[];
       terminalInstruction?: string;
+      contentForUser?: string;
     }
   | {
       type: 'ask_user';
@@ -90,6 +102,49 @@ export type ManagedToolEvidence = {
   reasonCode?: string;
   message?: string;
 };
+
+function parseDebugTodoLink(raw: unknown): DebugTodoLink | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const record = raw as Record<string, unknown>;
+  const status = asText(record.status);
+  if (status !== 'linked' && status !== 'unmatched' && status !== 'no_active_todo') return undefined;
+  const itemStatus = asText(record.itemStatus);
+  const unitType = asText(record.unitType);
+  return {
+    status,
+    itemId: asText(record.itemId) || undefined,
+    itemStatus:
+      itemStatus === 'pending' ||
+      itemStatus === 'in_progress' ||
+      itemStatus === 'passed' ||
+      itemStatus === 'failed' ||
+      itemStatus === 'skipped'
+        ? itemStatus
+        : undefined,
+    testUnit: asText(record.testUnit) || undefined,
+    unitType:
+      unitType === 'interface' ||
+      unitType === 'function' ||
+      unitType === 'page_action' ||
+      unitType === 'redis_key' ||
+      unitType === 'db_table' ||
+      unitType === 'external_dependency' ||
+      unitType === 'document_check'
+        ? unitType
+        : undefined,
+    actualResult: asText(record.actualResult) || undefined,
+    reasonCode: asText(record.reasonCode) || undefined,
+    message: asText(record.message) || undefined,
+  };
+}
+
+export function readManagedDebugTodoLinkFromContent(content: string): DebugTodoLink | undefined {
+  try {
+    return parseDebugTodoLink(JSON.parse(asText(content)).debugTodoLink);
+  } catch {
+    return undefined;
+  }
+}
 
 export type BrowserVisualCheckStatus = 'passed' | 'failed';
 
@@ -2619,6 +2674,12 @@ export class AltusManagedToolRuntime {
         description: `打开 ${targetUrl}`,
         cdpPort,
       });
+      const debugTodoLink = linkDebugTodoBrowserEvidence({
+        sessionId: this.input.sessionId,
+        itemId: asText(rawArgs.debugTodoItemId) || undefined,
+        toolName: 'debug_open_page',
+        evidence: browserScreenshot,
+      });
       return {
         type: 'result',
         activatedSkills,
@@ -2633,6 +2694,7 @@ export class AltusManagedToolRuntime {
           protocol: normalizedTarget.protocol,
           localFilePath: normalizedTarget.localFilePath,
           browserScreenshot,
+          debugTodoLink,
           output: stdout,
         }),
       };
@@ -2681,6 +2743,12 @@ export class AltusManagedToolRuntime {
         description: asText(rawArgs.description),
         cdpPort,
       });
+      const debugTodoLink = linkDebugTodoBrowserEvidence({
+        sessionId: this.input.sessionId,
+        itemId: asText(rawArgs.debugTodoItemId) || undefined,
+        toolName: 'browser_interact',
+        evidence: browserScreenshot,
+      });
       return {
         type: 'result',
         activatedSkills,
@@ -2696,6 +2764,7 @@ export class AltusManagedToolRuntime {
           pixels: asPositiveInt(rawArgs.pixels, 600, 5000),
           cdpPort,
           browserScreenshot,
+          debugTodoLink,
           output: stdout,
         }),
       };
@@ -3042,6 +3111,96 @@ export class AltusManagedToolRuntime {
         type: 'result',
         activatedSkills,
         content: JSON.stringify({ todos }),
+      };
+    }
+
+    if (toolName === 'debug_todo_write') {
+      const triggerReason = asText(rawArgs.triggerReason);
+      if (!triggerReason) {
+        throw new Error('debug_todo_write_missing_trigger_reason');
+      }
+      const debugDepth = asText(rawArgs.debugDepth) || 'real_link';
+      const relatedDocument = asText(rawArgs.relatedDocument) || undefined;
+
+      const rawItems = Array.isArray(rawArgs.items) ? rawArgs.items : [];
+      const items: DebugTodoItem[] = rawItems
+        .map((item: unknown) => {
+          if (!item || typeof item !== 'object') return null;
+          const record = item as Record<string, unknown>;
+          const id = asText(record.id);
+          const testUnit = asText(record.testUnit);
+          const unitType = asText(record.unitType) as DebugTodoItem['unitType'];
+          const expectedInput = asText(record.expectedInput);
+          const expectedOutput = asText(record.expectedOutput);
+          const boundaryConditions = asText(record.boundaryConditions);
+          const verificationMethod = asText(record.verificationMethod);
+          if (!id || !testUnit || !unitType || !expectedInput || !expectedOutput || !boundaryConditions || !verificationMethod) {
+            return null;
+          }
+          return {
+            id,
+            testUnit,
+            unitType,
+            expectedInput,
+            expectedOutput,
+            boundaryConditions,
+            verificationMethod,
+            status: 'pending' as const,
+          };
+        })
+        .filter((item): item is NonNullable<typeof item> => Boolean(item)) as DebugTodoItem[];
+
+      if (items.length === 0) {
+        throw new Error('debug_todo_write_missing_valid_items');
+      }
+
+      const todo = generateDebugTodo({
+        sessionId: this.input.sessionId,
+        triggerReason,
+        debugDepth: debugDepth as DebugTodo['debugDepth'],
+        relatedDocument,
+      });
+
+      // Replace default items with user-provided ones
+      todo.items = items;
+      saveDebugTodo(todo);
+
+      // Build document query summary for functional positioning
+      const docSummary = buildDocQuerySummary(triggerReason);
+
+      const formattedTodo = formatDebugTodo(todo);
+      const activeItemId = resolveActiveDebugTodoItemId(this.input.sessionId);
+
+      return {
+        type: 'result',
+        activatedSkills,
+        content: JSON.stringify({
+          debugTodo: {
+            sessionId: todo.sessionId,
+            triggerReason: todo.triggerReason,
+            debugDepth: todo.debugDepth,
+            itemCount: todo.items.length,
+            activeItemId,
+            items: todo.items.map((item) => ({
+              id: item.id,
+              testUnit: item.testUnit,
+              unitType: item.unitType,
+              status: item.status,
+            })),
+          },
+          formatted: formattedTodo,
+          docGuidance: docSummary,
+          nextSteps: [
+            'Execute each test unit in order, updating status after each one.',
+            activeItemId
+              ? `Pass debugTodoItemId="${activeItemId}" to the next debug_open_page or browser_interact call that verifies this test unit.`
+              : 'Pass debugTodoItemId to debug_open_page or browser_interact whenever a browser action verifies a debug todo item.',
+            'If a unit fails, record the exact deviation before proceeding.',
+            'When locating a feature point, consult the docGuidance first.',
+            'Categorize final conclusions into: passed / inconsistent / missing / unverifiable.',
+          ],
+        }),
+        contentForUser: formattedTodo,
       };
     }
 

@@ -28,10 +28,25 @@ oneceo is an AI agent platform built around a task command center model. It comb
 
 ## Screenshots
 
-| Command center | Review drawer |
-| --- | --- |
-| ![Administrator command center](agent自动工作汇报/admin_detail_command_center_20260426/osac-command-center.png) | ![OSAC review drawer](agent自动工作汇报/admin_detail_command_center_20260426/osac-diff-drawer.png) |
-| Dense operational state, release identity, and inspector context in one view. | Pre-change diff review for governance actions that need fast but careful verification. |
+### 1. User workspace home
+
+![User workspace home](docs/readme-assets/user-workspace-home.png)
+
+### 2. Dialogue in progress
+
+![Dialogue in progress](docs/readme-assets/dialogue-in-progress.png)
+
+### 3. Sidebar actions
+
+![Sidebar actions](docs/readme-assets/sidebar-actions.png)
+
+### 4. Sidebar remote debug
+
+![Sidebar remote debug](docs/readme-assets/sidebar-remote-debug.png)
+
+### 5. Sidebar deployment
+
+![Sidebar deployment](docs/readme-assets/sidebar-deployment.png)
 
 ## Quick start
 

@@ -39,6 +39,50 @@ export interface DebugTodoItem {
   actualResult?: string;
   /** 备注 */
   notes?: string;
+  /** 最近一次关联工具 */
+  latestToolName?: 'debug_open_page' | 'browser_interact';
+  /** 最近一次浏览器动作 */
+  latestAction?: string;
+  /** 最近一次截图证据摘要 */
+  latestScreenshot?: DebugTodoScreenshotSummary;
+}
+
+export interface DebugTodoScreenshotSummary {
+  status: 'captured' | 'capture_failed' | 'storage_failed';
+  storageKey?: string;
+  capturedAt?: string;
+  visualStatus?: 'passed' | 'failed';
+  reasonCode?: string;
+  message?: string;
+}
+
+export interface DebugTodoLink {
+  status: 'linked' | 'unmatched' | 'no_active_todo';
+  itemId?: string;
+  itemStatus?: DebugTodoItem['status'];
+  testUnit?: string;
+  unitType?: DebugTodoItem['unitType'];
+  actualResult?: string;
+  reasonCode?: string;
+  message?: string;
+}
+
+export interface BrowserDebugEvidenceSummary {
+  status?: string;
+  storageKey?: string;
+  capturedAt?: string;
+  reasonCode?: string;
+  message?: string;
+  visualCheck?: {
+    status?: string;
+    reasonCode?: string;
+    message?: string;
+  };
+  source?: {
+    action?: string;
+    description?: string;
+    url?: string;
+  };
 }
 
 /** 调试 todo 完整结构 */
@@ -405,6 +449,178 @@ export function setDebugTodoOverallStatus(
 
   debugTodoStore.set(sessionId, updated);
   return updated;
+}
+
+function resolveDebugTodoItem(todo: DebugTodo, itemId?: string): DebugTodoItem | undefined {
+  const normalizedItemId = typeof itemId === 'string' ? itemId.trim() : '';
+  if (normalizedItemId) {
+    return todo.items.find((item) => item.id === normalizedItemId);
+  }
+
+  return (
+    todo.items.find((item) => item.status === 'pending' && item.unitType === 'page_action') ||
+    todo.items.find((item) => item.status === 'pending') ||
+    todo.items.find((item) => item.unitType === 'page_action')
+  );
+}
+
+function summarizeBrowserDebugEvidence(evidence: BrowserDebugEvidenceSummary): {
+  itemStatus: DebugTodoItem['status'];
+  actualResult: string;
+  screenshot: DebugTodoScreenshotSummary;
+} {
+  const screenshotStatus = evidence.status;
+  const visualStatus = evidence.visualCheck?.status;
+  const passed = screenshotStatus === 'captured' && visualStatus === 'passed';
+  const reasonCode = evidence.visualCheck?.reasonCode || evidence.reasonCode;
+  const message = evidence.visualCheck?.message || evidence.message;
+  const description = evidence.source?.description || evidence.source?.action || '浏览器调试动作';
+  const actualResult = passed
+    ? `${description} 已通过，截图已捕获并通过视觉诊断。`
+    : `${description} 未通过：${message || reasonCode || screenshotStatus || '未获得有效截图证据'}`;
+
+  return {
+    itemStatus: passed ? 'passed' : 'failed',
+    actualResult,
+    screenshot: {
+      status:
+        screenshotStatus === 'captured' || screenshotStatus === 'capture_failed' || screenshotStatus === 'storage_failed'
+          ? screenshotStatus
+          : 'capture_failed',
+      storageKey: evidence.storageKey,
+      capturedAt: evidence.capturedAt,
+      visualStatus: visualStatus === 'passed' || visualStatus === 'failed' ? visualStatus : undefined,
+      reasonCode,
+      message,
+    },
+  };
+}
+
+export function linkDebugTodoBrowserEvidence(input: {
+  sessionId: string;
+  itemId?: string;
+  toolName: 'debug_open_page' | 'browser_interact';
+  evidence: BrowserDebugEvidenceSummary;
+}): DebugTodoLink {
+  const todo = debugTodoStore.get(input.sessionId);
+  if (!todo) {
+    return {
+      status: 'no_active_todo',
+      reasonCode: 'debug_todo_not_found',
+      message: '当前 run 未找到调试专用 todo。',
+    };
+  }
+
+  const item = resolveDebugTodoItem(todo, input.itemId);
+  if (!item) {
+    return {
+      status: 'unmatched',
+      reasonCode: 'debug_todo_item_not_found',
+      message: input.itemId ? `未找到调试子 todo: ${input.itemId}` : '未找到可关联的调试子 todo。',
+    };
+  }
+
+  if (input.itemId && item.id !== input.itemId) {
+    return {
+      status: 'unmatched',
+      itemId: input.itemId,
+      reasonCode: 'debug_todo_item_not_found',
+      message: `未找到调试子 todo: ${input.itemId}`,
+    };
+  }
+
+  const summary = summarizeBrowserDebugEvidence(input.evidence);
+  const updated = updateDebugTodoItem(input.sessionId, item.id, {
+    status: summary.itemStatus,
+    actualResult: summary.actualResult,
+    latestToolName: input.toolName,
+    latestAction: input.evidence.source?.action,
+    latestScreenshot: summary.screenshot,
+  });
+  const updatedItem = updated?.items.find((candidate) => candidate.id === item.id) || {
+    ...item,
+    status: summary.itemStatus,
+    actualResult: summary.actualResult,
+  };
+
+  return {
+    status: 'linked',
+    itemId: updatedItem.id,
+    itemStatus: updatedItem.status,
+    testUnit: updatedItem.testUnit,
+    unitType: updatedItem.unitType,
+    actualResult: updatedItem.actualResult,
+    reasonCode: summary.screenshot.reasonCode,
+    message: summary.screenshot.message,
+  };
+}
+
+function summarizeDebugTodoFailureMessage(errorMessage: string): string {
+  const compact = errorMessage.replace(/\s+/g, ' ').trim();
+  const withoutDiagnostics = compact.split(' diagnostics=')[0] || compact;
+  return withoutDiagnostics.slice(0, 320);
+}
+
+export function linkDebugTodoToolFailure(input: {
+  sessionId: string;
+  itemId?: string;
+  toolName: 'debug_open_page' | 'browser_interact';
+  action?: string;
+  description?: string;
+  errorMessage: string;
+  reasonCode?: string;
+}): DebugTodoLink {
+  const todo = debugTodoStore.get(input.sessionId);
+  const reasonCode = input.reasonCode || 'browser_action_failed';
+  const message = summarizeDebugTodoFailureMessage(input.errorMessage);
+  if (!todo) {
+    return {
+      status: 'no_active_todo',
+      reasonCode: 'debug_todo_not_found',
+      message: '当前 run 未找到调试专用 todo。',
+    };
+  }
+
+  const item = resolveDebugTodoItem(todo, input.itemId);
+  if (!item || (input.itemId && item.id !== input.itemId)) {
+    return {
+      status: 'unmatched',
+      itemId: input.itemId,
+      reasonCode: 'debug_todo_item_not_found',
+      message: input.itemId ? `未找到调试子 todo: ${input.itemId}` : '未找到可关联的调试子 todo。',
+    };
+  }
+
+  const description = input.description || input.action || '浏览器调试动作';
+  const actualResult = `${description} 未通过：${message || reasonCode}`;
+  const updated = updateDebugTodoItem(input.sessionId, item.id, {
+    status: 'failed',
+    actualResult,
+    latestToolName: input.toolName,
+    latestAction: input.action,
+  });
+  const updatedItem = updated?.items.find((candidate) => candidate.id === item.id) || {
+    ...item,
+    status: 'failed' as const,
+    actualResult,
+  };
+
+  return {
+    status: 'linked',
+    itemId: updatedItem.id,
+    itemStatus: updatedItem.status,
+    testUnit: updatedItem.testUnit,
+    unitType: updatedItem.unitType,
+    actualResult: updatedItem.actualResult,
+    reasonCode,
+    message,
+  };
+}
+
+export function resolveActiveDebugTodoItemId(sessionId: string): string | undefined {
+  const todo = debugTodoStore.get(sessionId);
+  if (!todo) return undefined;
+  return resolveDebugTodoItem(todo)?.id;
 }
 
 // ============================================================================

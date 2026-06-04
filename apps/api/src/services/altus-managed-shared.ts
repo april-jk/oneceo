@@ -423,6 +423,11 @@ export function buildManagedToolDefinitions() {
               type: 'boolean',
               description: 'Whether to ensure n.eko debug service is ready before opening the page. Default true.',
             },
+            debugTodoItemId: {
+              type: 'string',
+              description:
+                'Optional debug_todo_write item id that this page-open action verifies, for example debug-001.',
+            },
           },
           ['url']
         ),
@@ -457,6 +462,11 @@ export function buildManagedToolDefinitions() {
               type: 'string',
               description:
                 'Short user-facing action description, for example 打开网页后点击“新游戏”按钮, 按下 ArrowUp 键, 向下滚动页面.',
+            },
+            debugTodoItemId: {
+              type: 'string',
+              description:
+                'Optional debug_todo_write item id that this browser action verifies, for example debug-003.',
             },
             selector: {
               type: 'string',

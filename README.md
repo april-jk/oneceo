@@ -45,6 +45,7 @@ oneceo is an AI agent platform for teams that need more than a chat box. It comb
 - [Minimum environment configuration](#minimum-environment-configuration)
 - [Safe example .env](#safe-example-env)
 - [Where to get the keys](#where-to-get-the-keys)
+- [OSAC binary](#osac-binary)
 - [Running the apps](#running-the-apps)
 - [Verification](#verification)
 - [Architecture notes](#architecture-notes)
@@ -288,6 +289,12 @@ Relevant doc:
 - Create an R2 bucket.
 - Generate an access key pair scoped to that bucket.
 - Fill `R2_BUCKET_NAME`, `R2_ACCOUNT_ID`, `R2_ENDPOINT`, `R2_ACCESS_KEY_ID`, and `R2_SECRET_ACCESS_KEY`.
+
+## OSAC binary
+
+If you need a downloadable OSAC runtime artifact from this repository, use the attachment below:
+
+- Linux amd64 `v1.1.4`: [docs/downloads/osac_linux_amd64_v1.1.4_osac](docs/downloads/osac_linux_amd64_v1.1.4_osac)
 
 ## Running the apps
 

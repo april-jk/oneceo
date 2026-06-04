@@ -45,6 +45,7 @@ oneceo 是一个面向团队协作的 AI Agent 平台，不只是一个聊天界
 - [最小环境配置](#最小环境配置)
 - [安全示例 env](#安全示例-env)
 - [这些密钥从哪里来](#这些密钥从哪里来)
+- [OSAC 下载](#osac-下载)
 - [运行方式](#运行方式)
 - [验证命令](#验证命令)
 - [架构说明](#架构说明)
@@ -288,6 +289,12 @@ R2_SECRET_ACCESS_KEY=your-r2-secret-key
 - 创建一个 R2 bucket。
 - 生成作用域受限的 access key。
 - 填写 `R2_BUCKET_NAME`、`R2_ACCOUNT_ID`、`R2_ENDPOINT`、`R2_ACCESS_KEY_ID`、`R2_SECRET_ACCESS_KEY`。
+
+## OSAC 下载
+
+如果你需要直接从仓库下载 OSAC 运行时附件，可以使用下面这个文件：
+
+- Linux amd64 `v1.1.4`： [docs/downloads/osac_linux_amd64_v1.1.4_osac](docs/downloads/osac_linux_amd64_v1.1.4_osac)
 
 ## 运行方式
 

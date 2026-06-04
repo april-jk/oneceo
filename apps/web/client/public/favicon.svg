@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" fill="none">
+  <defs>
+    <style>
+      .navy { fill: #132f67; }
+      .navy-stroke { stroke: #132f67; }
+      .gold { fill: #f5b238; }
+    </style>
+  </defs>
+
+  <path
+    class="navy-stroke"
+    d="M214 643C214 560 287 489 404 452C540 408 721 430 838 495C889 523 913 559 913 596C913 646 869 691 788 722C702 756 589 776 476 776C322 776 214 723 214 643Z"
+    stroke-width="26"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+
+  <path
+    class="navy"
+    d="M479 166L691 628H620L458 281L286 589C277 606 256 613 239 603C223 593 217 572 226 555L427 203C436 184 456 172 479 166Z"
+  />
+
+  <path
+    class="navy"
+    d="M470 166C493 166 514 179 523 201L699 589C708 612 696 637 673 646C650 655 625 643 616 620L440 232C431 209 443 184 466 175C471 173 475 172 470 166Z"
+    opacity=".96"
+  />
+
+  <path
+    class="gold"
+    d="M520 367C528 401 533 406 567 414C533 422 528 427 520 461C512 427 507 422 473 414C507 406 512 401 520 367Z"
+  />
+
+  <circle class="navy" cx="520" cy="509" r="18" />
+</svg>

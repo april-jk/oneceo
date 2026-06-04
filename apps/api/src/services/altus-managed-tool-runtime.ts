@@ -36,6 +36,14 @@ import {
   type ManagedMcpProvider,
   type ManagedSkillContext,
 } from './altus-managed-shared';
+import {
+  generateDebugTodo,
+  saveDebugTodo,
+  formatDebugTodo,
+  buildDocQuerySummary,
+  type DebugTodoItem,
+  type DebugTodo,
+} from './debug-todo-service';
 import type { AltusManagedTaskIntentProfile } from './altus-managed-prompt-service';
 import type { TaskClarificationType } from './task-intent-shape-service';
 import {
@@ -51,6 +59,7 @@ export type ManagedToolResult =
       activatedSkills?: ManagedSkillContext[];
       evidence?: ManagedToolEvidence[];
       terminalInstruction?: string;
+      contentForUser?: string;
     }
   | {
       type: 'ask_user';
@@ -3042,6 +3051,91 @@ export class AltusManagedToolRuntime {
         type: 'result',
         activatedSkills,
         content: JSON.stringify({ todos }),
+      };
+    }
+
+    if (toolName === 'debug_todo_write') {
+      const triggerReason = asText(rawArgs.triggerReason);
+      if (!triggerReason) {
+        throw new Error('debug_todo_write_missing_trigger_reason');
+      }
+      const debugDepth = asText(rawArgs.debugDepth) || 'real_link';
+      const relatedDocument = asText(rawArgs.relatedDocument) || undefined;
+
+      const rawItems = Array.isArray(rawArgs.items) ? rawArgs.items : [];
+      const items: DebugTodoItem[] = rawItems
+        .map((item: unknown) => {
+          if (!item || typeof item !== 'object') return null;
+          const record = item as Record<string, unknown>;
+          const id = asText(record.id);
+          const testUnit = asText(record.testUnit);
+          const unitType = asText(record.unitType) as DebugTodoItem['unitType'];
+          const expectedInput = asText(record.expectedInput);
+          const expectedOutput = asText(record.expectedOutput);
+          const boundaryConditions = asText(record.boundaryConditions);
+          const verificationMethod = asText(record.verificationMethod);
+          if (!id || !testUnit || !unitType || !expectedInput || !expectedOutput || !boundaryConditions || !verificationMethod) {
+            return null;
+          }
+          return {
+            id,
+            testUnit,
+            unitType,
+            expectedInput,
+            expectedOutput,
+            boundaryConditions,
+            verificationMethod,
+            status: 'pending' as const,
+          };
+        })
+        .filter((item): item is NonNullable<typeof item> => Boolean(item)) as DebugTodoItem[];
+
+      if (items.length === 0) {
+        throw new Error('debug_todo_write_missing_valid_items');
+      }
+
+      const todo = generateDebugTodo({
+        sessionId: this.input.sessionId,
+        triggerReason,
+        debugDepth: debugDepth as DebugTodo['debugDepth'],
+        relatedDocument,
+      });
+
+      // Replace default items with user-provided ones
+      todo.items = items;
+      saveDebugTodo(todo);
+
+      // Build document query summary for functional positioning
+      const docSummary = buildDocQuerySummary(triggerReason);
+
+      const formattedTodo = formatDebugTodo(todo);
+
+      return {
+        type: 'result',
+        activatedSkills,
+        content: JSON.stringify({
+          debugTodo: {
+            sessionId: todo.sessionId,
+            triggerReason: todo.triggerReason,
+            debugDepth: todo.debugDepth,
+            itemCount: todo.items.length,
+            items: todo.items.map((item) => ({
+              id: item.id,
+              testUnit: item.testUnit,
+              unitType: item.unitType,
+              status: item.status,
+            })),
+          },
+          formatted: formattedTodo,
+          docGuidance: docSummary,
+          nextSteps: [
+            'Execute each test unit in order, updating status after each one.',
+            'If a unit fails, record the exact deviation before proceeding.',
+            'When locating a feature point, consult the docGuidance first.',
+            'Categorize final conclusions into: passed / inconsistent / missing / unverifiable.',
+          ],
+        }),
+        contentForUser: formattedTodo,
       };
     }
 

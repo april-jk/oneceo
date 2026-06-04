@@ -840,9 +840,78 @@ export function buildManagedToolDefinitions() {
     {
       type: 'function',
       function: {
+        name: 'debug_todo_write',
+        description:
+          'Write or update the debug-specific todo list before starting any debugging or testing workflow. This is separate from the main task todo and focuses on test units, expected inputs/outputs, boundary conditions, and verification methods. When the user asks to debug, test, verify, or diagnose a feature, call this tool first to establish the debug plan.',
+        parameters: objectSchema(
+          {
+            triggerReason: {
+              type: 'string',
+              description:
+                'Why debugging is triggered, e.g. "user asked to test login flow", "debug_open_page reported unreachable", "visual detection found defect".',
+            },
+            debugDepth: {
+              type: 'string',
+              description:
+                'Testing depth: interface_only (API only), real_link (full request chain), storage_verification (DB/Redis check), or full_link (Playwright E2E).',
+            },
+            relatedDocument: {
+              type: 'string',
+              description:
+                'Optional reference to the adopted design document path, e.g. "docs/xxx_[yyyymmdd-hhmm已采用].md".',
+            },
+            items: {
+              type: 'array',
+              description:
+                'Ordered list of test units. Each unit must be specific: a single endpoint, function, page action, Redis key, or DB table.',
+              items: objectSchema(
+                {
+                  id: {
+                    type: 'string',
+                    description: 'Unique test unit identifier, e.g. "debug-001".',
+                  },
+                  testUnit: {
+                    type: 'string',
+                    description:
+                      'Specific test target: POST /api/xxx, functionName(), page click action, Redis key pattern, or DB table name.',
+                  },
+                  unitType: {
+                    type: 'string',
+                    description:
+                      'Type of test unit: interface, function, page_action, redis_key, db_table, external_dependency, or document_check.',
+                  },
+                  expectedInput: {
+                    type: 'string',
+                    description: 'Exact input values or parameters for this test unit.',
+                  },
+                  expectedOutput: {
+                    type: 'string',
+                    description: 'Expected response, return value, or observable outcome.',
+                  },
+                  boundaryConditions: {
+                    type: 'string',
+                    description: 'Edge cases, failure conditions, and boundary scenarios to verify.',
+                  },
+                  verificationMethod: {
+                    type: 'string',
+                    description:
+                      'How to verify: curl command, Playwright script, SQL query, redis-cli command, etc.',
+                  },
+                },
+                ['id', 'testUnit', 'unitType', 'expectedInput', 'expectedOutput', 'boundaryConditions', 'verificationMethod']
+              ),
+            },
+          },
+          ['triggerReason', 'debugDepth', 'items']
+        ),
+      },
+    },
+    {
+      type: 'function',
+      function: {
         name: 'todowrite',
         description:
-          'Write or update the current execution todo list before starting substantial work and after each major step.',
+          'Write or update the current execution todo list before starting substantial work and after each major step. For debugging workflows, call debug_todo_write FIRST to establish the test plan, then continue using this tool for tracking repair and verification progress.',
         parameters: objectSchema(
           {
             todos: {

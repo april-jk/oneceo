@@ -198,7 +198,7 @@ export class AltusManagedToolExecutor {
         modelRoundId: input.modelRoundId,
         args: eventArgs,
         content: contentForModel,
-        contentForUser: this.input.buildToolEventContent(toolName, 'completed'),
+        contentForUser: result.contentForUser || this.input.buildToolEventContent(toolName, 'completed'),
         activatedSkills: result.activatedSkills as any,
         result: result.content,
       });
@@ -209,7 +209,7 @@ export class AltusManagedToolExecutor {
         'tool_call_completed',
         {
           toolName,
-          content: this.input.buildToolEventContent(toolName, 'completed'),
+          content: result.contentForUser || this.input.buildToolEventContent(toolName, 'completed'),
           arguments: eventArgs,
           toolCallId,
           toolResultEnvelope,

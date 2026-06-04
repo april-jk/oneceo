@@ -1459,6 +1459,11 @@ private async chargeForModelCall(state: AltusRunState, input: {
       if (status === 'completed') return '视觉检测页面已打开';
       return '视觉检测页面打开失败';
     }
+    if (toolName === 'debug_todo_write') {
+      if (status === 'started' || status === 'progress') return '正在制定调试计划';
+      if (status === 'completed') return '调试计划已制定';
+      return '调试计划制定失败';
+    }
     if (status === 'started') return `调用工具 ${toolName}`;
     if (status === 'completed') return `工具 ${toolName} 已完成`;
     if (status === 'failed') return `工具 ${toolName} 失败`;

@@ -1,10 +1,91 @@
+<div align="center">
+
 # oneceo
 
-oneceo is an AI agent platform built around a task command center model. It combines a user-facing workspace, an orchestration API, an administrator console, a docs/blog site, and E2B-based runtime infrastructure so teams can create, inspect, govern, and recover agent work instead of treating it as a black box.
+<p>
+  <strong>AI task orchestration and governance platform built around a task command center model.</strong>
+</p>
 
-<p align="center">
+<p>
+  <a href="./README.md">English</a> · <a href="./README.zh-CN.md">简体中文</a>
+</p>
+
+<p>
   <img src="apps/web/client/public/logo-mark.png" alt="oneceo mark" width="120">
 </p>
+
+<p>
+  <img alt="License" src="https://img.shields.io/badge/license-MIT-0f172a?style=for-the-badge">
+  <img alt="Node.js" src="https://img.shields.io/badge/node-%3E%3D18-2563eb?style=for-the-badge&logo=node.js&logoColor=white">
+  <img alt="pnpm" src="https://img.shields.io/badge/pnpm-10.4.1+-f59e0b?style=for-the-badge&logo=pnpm&logoColor=white">
+  <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-first-3178c6?style=for-the-badge&logo=typescript&logoColor=white">
+  <img alt="Monorepo" src="https://img.shields.io/badge/workspace-monorepo-111827?style=for-the-badge">
+  <img alt="Runtime" src="https://img.shields.io/badge/runtime-E2B%20%2B%20OSAC-059669?style=for-the-badge">
+</p>
+
+<p>
+  <img alt="AI Agents" src="https://img.shields.io/badge/AI%20Agents-task%20sessions-1d4ed8?style=flat-square">
+  <img alt="Admin Console" src="https://img.shields.io/badge/Admin-console-7c3aed?style=flat-square">
+  <img alt="Orchestration API" src="https://img.shields.io/badge/API-orchestration-0f766e?style=flat-square">
+  <img alt="Sandbox" src="https://img.shields.io/badge/Sandbox-lifecycle-ca8a04?style=flat-square">
+  <img alt="Deployments" src="https://img.shields.io/badge/Deployments-managed-9f1239?style=flat-square">
+</p>
+
+</div>
+
+oneceo is an AI agent platform for teams that need more than a chat box. It combines a user-facing workspace, an orchestration API, an administrator console, a docs/blog site, and E2B-based runtime infrastructure so agent work can be created, inspected, governed, recovered, and audited instead of treated like a black box.
+
+## Table of contents
+
+- [Why oneceo](#why-oneceo)
+- [GitHub at a glance](#github-at-a-glance)
+- [Repository layout](#repository-layout)
+- [Screenshots](#screenshots)
+- [Quick start](#quick-start)
+- [Minimum environment configuration](#minimum-environment-configuration)
+- [Safe example .env](#safe-example-env)
+- [Where to get the keys](#where-to-get-the-keys)
+- [Running the apps](#running-the-apps)
+- [Verification](#verification)
+- [Architecture notes](#architecture-notes)
+- [Brand assets](#brand-assets)
+- [Documentation index](#documentation-index)
+- [Contributing and support](#contributing-and-support)
+- [License](#license)
+
+## Why oneceo
+
+Teams using AI agents usually need four things at the same time:
+
+- A user workspace where tasks, chat, previews, and outputs stay connected
+- A backend that can orchestrate long-running task sessions instead of one-off prompts
+- Administrator tooling for governance, traces, deployments, and recoverability
+- Runtime infrastructure that makes execution observable and repeatable
+
+oneceo is designed around that stack.
+
+## GitHub at a glance
+
+### Core capabilities
+
+- Persistent task-session orchestration instead of single-turn chat
+- E2B-based execution environments routed through the API
+- Connector flows, including Composio-hosted integrations
+- Audit and trace visibility for requests, tools, and runtime state
+- Separate user and administrator surfaces
+- Deployment and environment management workflows
+- Archive and recovery paths for sandbox-backed execution
+
+### Tech profile
+
+- Frontend surfaces: user workspace, admin console, docs/blog site
+- Backend: orchestration API with connectors, session control, archive and recovery services
+- Runtime: E2B sandboxes coordinated through OSAC
+- Workspace style: pnpm monorepo with a standalone `npm` install for `apps/admin_management`
+
+### Topics
+
+`ai-agents` `task-orchestration` `agent-platform` `admin-console` `sandbox-runtime` `e2b` `typescript` `monorepo`
 
 ## Repository layout
 
@@ -16,15 +97,6 @@ oneceo is an AI agent platform built around a task command center model. It comb
 - `services/*`: extra service packages in the workspace
 - `e2b_templates`: E2B sandbox templates
 - `docs`: architecture, testing, workflow, and feature design documents
-
-## What the product includes
-
-- Persistent task-session orchestration instead of single-turn chat
-- E2B-based execution environments routed through the API
-- Connector flows, including Composio-hosted integrations
-- Audit and trace visibility for requests, tools, and runtime state
-- Separate user and administrator surfaces
-- Deployment and environment management workflows
 
 ## Screenshots
 
@@ -52,7 +124,7 @@ oneceo is an AI agent platform built around a task command center model. It comb
 
 ### Requirements
 
-- Node.js `20+` recommended
+- Node.js `18+` minimum, `20+` recommended
 - pnpm `10.4.1+`
 - npm `10+`
 - PostgreSQL
@@ -138,7 +210,7 @@ Without these, the UI can boot, but the main execution chain will not work end t
 | `GITHUB_DEPLOYMENT_INSTALLATION_ID` | GitHub App installation binding |
 | `GITHUB_DEPLOYMENT_APP_PRIVATE_KEY` | GitHub App authentication |
 
-## Safe example `.env`
+## Safe example .env
 
 Use this as a local placeholder-only example. Replace the fake values in your own untracked `apps/.env`.
 

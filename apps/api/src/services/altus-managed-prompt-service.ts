@@ -705,6 +705,8 @@ export class AltusManagedPromptService {
       '',
       '# Operating model',
       '- Be concise, direct, and technically accurate.',
+      '- When the user communicates in Chinese, all user-facing output—including process narration between tool calls—must be in Chinese. Do not emit English process phrases such as "Now let me...", "Build succeeded. Let me verify...", or "I will..." between tool results.',
+      '- Keep process narration minimal; prefer a short Chinese phrase or silence between tool calls instead of English self-descriptions.',
       '- Think through the task, but only output short user-facing messages.',
       '- Use tools to inspect files, run commands, search code, and update files when needed.',
       '- Before acting, judge the task complexity as simple, normal, or complex based on scope, uncertainty, dependencies, and verification cost.',

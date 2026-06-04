@@ -1,5 +1,8 @@
 import { taskCreationFileMemoryStore } from '../agents/task-creation/file-memory-store';
-import { AltusManagedToolRuntime } from './altus-managed-tool-runtime';
+import {
+  AltusManagedToolRuntime,
+  readManagedDebugTodoLinkFromContent,
+} from './altus-managed-tool-runtime';
 import {
   altusManagedPromptService,
   type AltusManagedTaskIntentProfile,
@@ -74,6 +77,7 @@ import {
   AltusRunUserVisibleStopError,
   normalizeAltusRunFailure,
 } from './altus-run-failure-view';
+import { linkDebugTodoToolFailure } from './debug-todo-service';
 
 const DELIVERABLES_READY_TEXT = '交付文件已生成';
 const DEPLOYMENT_COMPLETION_BLOCKED_PREFIX = 'deployment_completion_blocked:';
@@ -1458,6 +1462,11 @@ private async chargeForModelCall(state: AltusRunState, input: {
       if (status === 'started' || status === 'progress') return '正在进行视觉检测';
       if (status === 'completed') return '视觉检测页面已打开';
       return '视觉检测页面打开失败';
+    }
+    if (toolName === 'debug_todo_write') {
+      if (status === 'started' || status === 'progress') return '正在制定调试计划';
+      if (status === 'completed') return '调试计划已制定';
+      return '调试计划制定失败';
     }
     if (status === 'started') return `调用工具 ${toolName}`;
     if (status === 'completed') return `工具 ${toolName} 已完成`;
@@ -2977,6 +2986,10 @@ private async chargeForModelCall(state: AltusRunState, input: {
             const eventPayload: Record<string, unknown> = {
               outputPreview: truncate(result.content, 4000),
             };
+            const debugTodoLink = readManagedDebugTodoLinkFromContent(result.content);
+            if (debugTodoLink) {
+              eventPayload.debugTodoLink = debugTodoLink;
+            }
 
             if (this.isDeploymentTool(toolName)) {
               const evidence = this.parseDeploymentCompletionEvidence(result.content);
@@ -3042,6 +3055,26 @@ private async chargeForModelCall(state: AltusRunState, input: {
               : debugFailure?.userActionRequired || pptRendererPathBlocked
                 ? 'tool_failed_user_action_required'
                 : 'tool_failed_but_recoverable';
+            const debugTodoFailureLink =
+              toolName === 'debug_open_page' || toolName === 'browser_interact'
+                ? linkDebugTodoToolFailure({
+                    sessionId: state.input.sessionId,
+                    itemId: asText(args.debugTodoItemId) || undefined,
+                    toolName,
+                    action: toolName === 'debug_open_page' ? 'open_page' : asText(args.action) || undefined,
+                    description:
+                      toolName === 'debug_open_page'
+                        ? `打开 ${asText(args.url) || '页面'}`
+                        : asText(args.description) || undefined,
+                    errorMessage: effectiveSanitizedError,
+                    reasonCode: errorCode,
+                  })
+                : undefined;
+            const debugTodoFailurePayload = debugTodoFailureLink
+              ? {
+                  debugTodoLink: debugTodoFailureLink,
+                }
+              : {};
             return {
               transitionReason: failedTransitionReason,
               recoveryMode: debugFailure?.userActionRequired || pptRendererPathBlocked ? 'awaiting_user' : 'tool_repair',
@@ -3056,6 +3089,7 @@ private async chargeForModelCall(state: AltusRunState, input: {
                       preview: effectiveSanitizedError,
                       detail: effectiveSanitizedError,
                     },
+                    ...debugTodoFailurePayload,
                     internalView: {
                       detail: [`工具: ${toolName}`, `rawError: ${effectiveRawError}`].join('\n'),
                     },
@@ -3068,11 +3102,14 @@ private async chargeForModelCall(state: AltusRunState, input: {
                         blocked: debugFailure.blocked,
                         target: this.normalizeDebugOpenPageTarget(args),
                       },
+                      ...debugTodoFailurePayload,
                       internalView: {
                         detail: [`工具: ${toolName}`, `rawError: ${effectiveRawError}`].join('\n'),
                       },
                     }
-                : undefined,
+                : Object.keys(debugTodoFailurePayload).length > 0
+                  ? debugTodoFailurePayload
+                  : undefined,
             };
           },
         });

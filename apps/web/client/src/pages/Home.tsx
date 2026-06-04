@@ -95,6 +95,7 @@ import {
 import AltusRunReplayDrawer, {
   type AltusDrawerView,
   type AltusReplayAction,
+  type AltusReplayDebugTodoLink,
   type AltusReplayFile,
 } from "@/components/AltusRunReplayDrawer";
 import {
@@ -10547,6 +10548,34 @@ function readManagedBrowserScreenshot(metadataRaw: unknown) {
   };
 }
 
+function readManagedDebugTodoLink(metadataRaw: unknown): AltusReplayDebugTodoLink | null {
+  const metadata = toRecord(metadataRaw);
+  const raw = toRecord(metadata.debugTodoLink);
+  const status = asText(raw.status);
+  if (status !== "linked" && status !== "unmatched" && status !== "no_active_todo") {
+    return null;
+  }
+  const itemStatusRaw = asText(raw.itemStatus);
+  const itemStatus =
+    itemStatusRaw === "pending" ||
+    itemStatusRaw === "in_progress" ||
+    itemStatusRaw === "passed" ||
+    itemStatusRaw === "failed" ||
+    itemStatusRaw === "skipped"
+      ? itemStatusRaw
+      : undefined;
+  return {
+    status,
+    itemId: asText(raw.itemId) || undefined,
+    itemStatus,
+    testUnit: asText(raw.testUnit) || undefined,
+    unitType: asText(raw.unitType) || undefined,
+    actualResult: asText(raw.actualResult) || undefined,
+    reasonCode: asText(raw.reasonCode) || undefined,
+    message: asText(raw.message) || undefined,
+  };
+}
+
 export function buildManagedReplayData(messages: AgentMessage[]) {
   const actionsByRun = new Map<string, AltusReplayAction[]>();
   const filesByRun = new Map<string, AltusReplayFile[]>();
@@ -10728,6 +10757,7 @@ export function buildManagedReplayData(messages: AgentMessage[]) {
           formatManagedToolInternalDetail(toolName, metadata) || undefined,
         artifactPaths: collectManagedReplayArtifactPaths(toolName, metadata),
         browserScreenshot: readManagedBrowserScreenshot(metadata),
+        debugTodoLink: readManagedDebugTodoLink(metadata),
       });
     } else {
       const action = actions[stepIndex];
@@ -10747,6 +10777,7 @@ export function buildManagedReplayData(messages: AgentMessage[]) {
           formatManagedToolInternalDetail(toolName, metadata) || undefined,
         artifactPaths: collectManagedReplayArtifactPaths(toolName, metadata),
         browserScreenshot: readManagedBrowserScreenshot(metadata) || action.browserScreenshot,
+        debugTodoLink: readManagedDebugTodoLink(metadata) || action.debugTodoLink,
       };
     }
 
@@ -10982,6 +11013,10 @@ export function getManagedToolPurposeSummary(
     return "更新任务清单";
   }
 
+  if (toolName === "debug_todo_write") {
+    return "创建调试步骤";
+  }
+
   if (toolName === "browser_interact") {
     return buildManagedBrowserInteractPurpose(args);
   }
@@ -11143,6 +11178,8 @@ function getManagedToolDisplayName(toolName: string) {
       return i18n.t("homeWorkspace.commandExecution");
     case "todowrite":
       return i18n.t("homeWorkspace.todo");
+    case "debug_todo_write":
+      return "创建调试步骤";
     case "write_file":
       return i18n.t("homeWorkspace.writeFile");
     case "read_file":

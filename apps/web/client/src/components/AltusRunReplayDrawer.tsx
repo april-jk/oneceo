@@ -58,6 +58,18 @@ export type AltusReplayAction = {
   internalDetail?: string;
   artifactPaths: string[];
   browserScreenshot?: AltusReplayBrowserScreenshot | null;
+  debugTodoLink?: AltusReplayDebugTodoLink | null;
+};
+
+export type AltusReplayDebugTodoLink = {
+  status: "linked" | "unmatched" | "no_active_todo";
+  itemId?: string;
+  itemStatus?: "pending" | "in_progress" | "passed" | "failed" | "skipped";
+  testUnit?: string;
+  unitType?: string;
+  actualResult?: string;
+  reasonCode?: string;
+  message?: string;
 };
 
 export type AltusReplayBrowserScreenshot = {
@@ -269,6 +281,97 @@ function formatScreenshotTimestamp(value?: string | null): string {
     hour: "2-digit",
     minute: "2-digit",
   });
+}
+
+function getDebugTodoStatusCopy(status?: AltusReplayDebugTodoLink["itemStatus"]) {
+  switch (status) {
+    case "passed":
+      return "已通过";
+    case "failed":
+      return "未通过";
+    case "in_progress":
+      return "进行中";
+    case "skipped":
+      return "已跳过";
+    case "pending":
+      return "待验证";
+    default:
+      return "未关联";
+  }
+}
+
+function getDebugTodoBadgeClass(link?: AltusReplayDebugTodoLink | null) {
+  if (!link || link.status !== "linked") {
+    return "border-zinc-200 bg-zinc-50 text-zinc-500 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-400";
+  }
+  if (link.itemStatus === "passed") {
+    return "border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-300";
+  }
+  if (link.itemStatus === "failed") {
+    return "border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-300";
+  }
+  return "border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300";
+}
+
+function DebugTodoLinkBadge({
+  link,
+  compact = false,
+}: {
+  link?: AltusReplayDebugTodoLink | null;
+  compact?: boolean;
+}) {
+  if (!link) return null;
+  const label =
+    link.status === "linked"
+      ? `${link.itemId || "debug todo"} · ${getDebugTodoStatusCopy(link.itemStatus)}`
+      : link.status === "unmatched"
+        ? "Debug Todo 未匹配"
+        : "Debug Todo 未激活";
+  return (
+    <span
+      className={cn(
+        "inline-flex max-w-full items-center gap-1 rounded-full border px-2 py-0.5 text-[11px]",
+        getDebugTodoBadgeClass(link),
+      )}
+    >
+      <Bug className="h-3 w-3 shrink-0" />
+      <span className={compact ? "truncate" : ""}>{label}</span>
+    </span>
+  );
+}
+
+function DebugTodoEvidence({ link }: { link?: AltusReplayDebugTodoLink | null }) {
+  if (!link) return null;
+  const title =
+    link.status === "linked"
+      ? link.testUnit || link.itemId || "Debug Todo"
+      : link.message || "Debug Todo";
+  const details = [
+    link.itemId ? `ID: ${link.itemId}` : "",
+    link.unitType ? `类型: ${link.unitType}` : "",
+    link.status === "linked" ? `状态: ${getDebugTodoStatusCopy(link.itemStatus)}` : "",
+  ].filter(Boolean);
+  return (
+    <div className="rounded-lg border border-zinc-200 bg-zinc-50 p-2 text-xs dark:border-zinc-700 dark:bg-zinc-800">
+      <div className="mb-1 flex items-center justify-between gap-2">
+        <div className="min-w-0 font-medium text-zinc-800 dark:text-zinc-100">
+          <span className="truncate">Debug Todo · {title}</span>
+        </div>
+        <DebugTodoLinkBadge link={link} />
+      </div>
+      {details.length > 0 ? (
+        <div className="text-[11px] text-zinc-500 dark:text-zinc-400">
+          {details.join(" · ")}
+        </div>
+      ) : null}
+      {link.actualResult || link.reasonCode || link.message ? (
+        <div className="mt-2 rounded-md border border-zinc-200 bg-white px-3 py-2 text-zinc-700 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200">
+          {link.reasonCode ? `${link.reasonCode}: ` : ""}
+          {link.actualResult || link.message || "本次动作已写入 debug todo 证据。"}
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 function BrowserScreenshotEvidence({
@@ -907,6 +1010,14 @@ export default function AltusRunReplayDrawer({
                                       ))}
                                   </div>
                                 ) : null}
+                                {action.debugTodoLink ? (
+                                  <div className="flex flex-wrap gap-1.5 pt-1">
+                                    <DebugTodoLinkBadge
+                                      link={action.debugTodoLink}
+                                      compact
+                                    />
+                                  </div>
+                                ) : null}
                               </div>
                             </button>
                           );
@@ -996,6 +1107,7 @@ export default function AltusRunReplayDrawer({
                               {selectedActionDetail}
                             </pre>
                           )}
+                          <DebugTodoEvidence link={selectedAction.debugTodoLink} />
                           <BrowserScreenshotEvidence
                             sessionId={sessionId}
                             runId={runId}

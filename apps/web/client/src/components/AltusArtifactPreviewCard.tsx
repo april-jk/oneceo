@@ -418,7 +418,10 @@ export default function AltusArtifactPreviewCard({
   const fallbackScreenshotCaptured = Boolean(
     !snapshotCaptured && hasPassedFallbackScreenshot && fallbackSnapshotUrl && !snapshotImageFailed,
   );
-  const snapshotUnavailableForComplexWeb = Boolean(snapshotIssue && !fallbackScreenshotCaptured);
+  const hasPreviewFallback = Boolean(snapshotIssue && previewPath);
+  const snapshotUnavailableForComplexWeb = Boolean(
+    snapshotIssue && !fallbackScreenshotCaptured && !previewPath,
+  );
   const snapshotUrl =
     snapshotCaptured && runId
       ? getTaskCreationPreviewSnapshotUrl(sessionId, runId)
@@ -431,7 +434,8 @@ export default function AltusArtifactPreviewCard({
       previewPath &&
       !deploymentPreviewUrl &&
       !snapshotCaptured &&
-      !snapshotUnavailableForComplexWeb,
+      !snapshotUnavailableForComplexWeb &&
+      !hasPreviewFallback,
   );
   const frameClass = cn(
     "group relative w-full overflow-hidden rounded-xl border bg-card pt-10",
@@ -441,7 +445,7 @@ export default function AltusArtifactPreviewCard({
         ? "min-h-[240px] sm:h-[400px] max-h-[640px]"
         : "min-h-[320px]",
   );
-  const headerLabel = snapshotIssue
+  const headerLabel = snapshotIssue && !hasPreviewFallback
     ? visibleArtifacts.length > 0
       ? i18n.t("previewPanel.artifactPreview.artifactGenerated")
       : i18n.t("previewPanel.artifactPreview.websiteSnapshotIssueTitle")
@@ -481,6 +485,11 @@ export default function AltusArtifactPreviewCard({
       setWebPreviewMessage("");
       return;
     }
+    if (hasPreviewFallback) {
+      setWebPreviewState("ready");
+      setWebPreviewMessage("");
+      return;
+    }
     if (deploymentPreviewUrl) {
       setWebPreviewState("ready");
       setWebPreviewMessage("");
@@ -495,6 +504,7 @@ export default function AltusArtifactPreviewCard({
     fallbackScreenshotCaptured,
     snapshotCaptured,
     snapshotUnavailableForComplexWeb,
+    hasPreviewFallback,
   ]);
 
   useEffect(() => {
@@ -601,7 +611,27 @@ export default function AltusArtifactPreviewCard({
                         i18n.t("previewPanel.artifactPreview.websiteSnapshotTitle"),
                     )}
                   </div>
-                  {selectedArtifact && onDeployRequested ? (
+                  {hasPreviewFallback ? (
+                    <div className="flex items-center gap-2">
+                      <span className="flex items-center gap-1 text-[11px] font-medium text-amber-600">
+                        <AlertTriangle className="h-3 w-3" />
+                        {i18n.t(
+                          "previewPanel.artifactPreview.snapshotUnavailableFallback",
+                        )}
+                      </span>
+                      <button
+                        type="button"
+                        className="rounded px-1.5 py-0.5 text-[11px] font-semibold text-amber-700 transition-colors hover:bg-amber-100"
+                        onClick={() => {
+                          setWebPreviewNonce(Date.now());
+                        }}
+                      >
+                        {i18n.t(
+                          "previewPanel.artifactPreview.refreshPreview",
+                        )}
+                      </button>
+                    </div>
+                  ) : selectedArtifact && onDeployRequested ? (
                     <Button
                       type="button"
                       variant="ghost"
@@ -645,7 +675,7 @@ export default function AltusArtifactPreviewCard({
                   }}
                   className="h-full w-full gap-0"
                 >
-                  <div className="absolute left-2 top-2 z-10 flex items-center gap-2">
+                  <div className="absolute left-2 top-1 z-10 flex items-center gap-2">
                     {showSourceControls ? (
                       <TabsList className="h-8 gap-1 rounded-2xl bg-background/85 px-1 backdrop-blur-sm">
                         {hasPreviewTab ? (
@@ -742,7 +772,7 @@ export default function AltusArtifactPreviewCard({
                               </div>
                             </div>
                           </div>
-                        ) : webPreviewState === "ready" ? (
+                        ) : webPreviewState === "ready" || hasPreviewFallback ? (
                           <ScaledWebPreviewFrame
                             src={selectedPreviewUrl}
                             title={`${getFilename(previewPath)} preview`}

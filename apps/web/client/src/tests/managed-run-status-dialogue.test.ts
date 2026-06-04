@@ -218,6 +218,15 @@ describe("managed run status dialogue", () => {
               description: "按下 ArrowUp 键",
             },
           },
+          debugTodoLink: {
+            status: "linked",
+            itemId: "debug-003",
+            itemStatus: "failed",
+            testUnit: "加速效果触发",
+            unitType: "page_action",
+            actualResult: "页面截图已捕获，但视觉检测未通过。",
+            reasonCode: "visible_text_too_short",
+          },
         },
       }),
     ]);
@@ -230,6 +239,47 @@ describe("managed run status dialogue", () => {
     );
     expect(action?.browserScreenshot?.source?.url).toBe("http://127.0.0.1:3000/");
     expect(action?.browserScreenshot?.source?.description).toBe("按下 ArrowUp 键");
+    expect(action?.debugTodoLink?.itemId).toBe("debug-003");
+    expect(action?.debugTodoLink?.itemStatus).toBe("failed");
+    expect(action?.debugTodoLink?.testUnit).toBe("加速效果触发");
+  });
+
+  it("attaches debug todo failure links to failed browser actions without screenshots", () => {
+    const replayByRun = buildManagedReplayData([
+      createManagedToolMessage({
+        eventType: "tool_call_failed",
+        content: "视觉检测步骤失败",
+        toolCallId: "browser-tool-failed-debug-todo",
+        toolName: "browser_interact",
+        metadata: {
+          arguments: {
+            debugTodoItemId: "debug-003",
+            action: "locator_click",
+            selector: "div[data-row='7'][data-col='7']",
+            description: "在棋盘上点击放置第一颗黑子",
+          },
+          debugTodoLink: {
+            status: "linked",
+            itemId: "debug-003",
+            itemStatus: "failed",
+            testUnit: "落子功能",
+            unitType: "page_action",
+            actualResult:
+              "在棋盘上点击放置第一颗黑子 未通过：locator.click: Timeout 5000ms exceeded.",
+            reasonCode: "managed_tool_error",
+          },
+        },
+      }),
+    ]);
+
+    const action = replayByRun.get("run-status-dialogue-1")?.actions[0];
+    expect(action?.status).toBe("failed");
+    expect(action?.browserScreenshot).toBeNull();
+    expect(action?.debugTodoLink?.itemId).toBe("debug-003");
+    expect(action?.debugTodoLink?.itemStatus).toBe("failed");
+    expect(action?.debugTodoLink?.actualResult).toContain(
+      "locator.click: Timeout",
+    );
   });
 
   it("keeps managed run_status between two tool cards", () => {
@@ -517,6 +567,13 @@ describe("managed run status dialogue", () => {
   });
 
   it("shows concrete browser interaction actions in managed activity rows", () => {
+    expect(getManagedToolPurposeSummary("debug_todo_write", {})).toBe(
+      "创建调试步骤",
+    );
+    expect(getManagedToolTimelineTitle("debug_todo_write", {}, "completed")).toBe(
+      "创建调试步骤",
+    );
+
     expect(
       getManagedToolPurposeSummary("debug_open_page", {
         arguments: {

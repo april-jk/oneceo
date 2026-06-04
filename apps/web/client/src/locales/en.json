@@ -1520,6 +1520,8 @@
       "websiteSnapshotIssueTitle": "Delivery preview failed visual detection",
       "websiteSnapshotIssueReason": "Diagnostic reason",
       "websiteSnapshotIssueDescription": "The files were generated, but the current page preview did not render into a deliverable state. Open the debug page to inspect it, then rerun visual detection after the fix.",
+      "snapshotUnavailableFallback": "Screenshot unavailable, showing live preview",
+      "refreshPreview": "Refresh preview",
       "loadingFileContent": "Loading file content",
       "noContent": "No content yet"
     }

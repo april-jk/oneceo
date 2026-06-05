@@ -144,6 +144,18 @@ export type WebsitePreviewSnapshotIssue = {
   status?: string;
 };
 
+export function canUseSimpleHtmlSnapshotFallback(
+  snapshot: TaskCreationWebsitePreviewSnapshot | null | undefined,
+  options: { hasPreviewPath?: boolean } = {},
+) {
+  return Boolean(
+    options.hasPreviewPath &&
+      snapshot?.kind === "website_screenshot" &&
+      snapshot.status === "capture_unavailable" &&
+      snapshot.reasonCode === "preview_start_command_missing",
+  );
+}
+
 function stripReasonPrefix(message: string, reasonCode?: string) {
   if (!message || !reasonCode) return message;
   const prefix = `${reasonCode}:`;
@@ -418,9 +430,16 @@ export default function AltusArtifactPreviewCard({
   const fallbackScreenshotCaptured = Boolean(
     !snapshotCaptured && hasPassedFallbackScreenshot && fallbackSnapshotUrl && !snapshotImageFailed,
   );
-  const hasPreviewFallback = Boolean(snapshotIssue && previewPath);
+  const hasPreviewFallback = canUseSimpleHtmlSnapshotFallback(previewSnapshot, {
+    hasPreviewPath: Boolean(previewPath),
+  });
   const snapshotUnavailableForComplexWeb = Boolean(
-    snapshotIssue && !fallbackScreenshotCaptured && !previewPath,
+    ((snapshotIssue && !hasPreviewFallback) ||
+      (webDeliveryMode &&
+        !hasSnapshotMetadata &&
+        !deploymentPreviewUrl &&
+        Boolean(previewPath))) &&
+      !fallbackScreenshotCaptured,
   );
   const snapshotUrl =
     snapshotCaptured && runId
@@ -434,8 +453,7 @@ export default function AltusArtifactPreviewCard({
       previewPath &&
       !deploymentPreviewUrl &&
       !snapshotCaptured &&
-      !snapshotUnavailableForComplexWeb &&
-      !hasPreviewFallback,
+      !snapshotUnavailableForComplexWeb,
   );
   const frameClass = cn(
     "group relative w-full overflow-hidden rounded-xl border bg-card pt-10",
@@ -485,11 +503,6 @@ export default function AltusArtifactPreviewCard({
       setWebPreviewMessage("");
       return;
     }
-    if (hasPreviewFallback) {
-      setWebPreviewState("ready");
-      setWebPreviewMessage("");
-      return;
-    }
     if (deploymentPreviewUrl) {
       setWebPreviewState("ready");
       setWebPreviewMessage("");
@@ -504,7 +517,6 @@ export default function AltusArtifactPreviewCard({
     fallbackScreenshotCaptured,
     snapshotCaptured,
     snapshotUnavailableForComplexWeb,
-    hasPreviewFallback,
   ]);
 
   useEffect(() => {
@@ -772,7 +784,7 @@ export default function AltusArtifactPreviewCard({
                               </div>
                             </div>
                           </div>
-                        ) : webPreviewState === "ready" || hasPreviewFallback ? (
+                        ) : webPreviewState === "ready" ? (
                           <ScaledWebPreviewFrame
                             src={selectedPreviewUrl}
                             title={`${getFilename(previewPath)} preview`}

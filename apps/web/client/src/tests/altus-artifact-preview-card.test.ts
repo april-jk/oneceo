@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  canUseSimpleHtmlSnapshotFallback,
   getWebsitePreviewSnapshotIssue,
   getScaledWebPreviewFrame,
   resolveArtifactOpenTarget,
@@ -119,6 +120,30 @@ describe("altus artifact preview card snapshot issues", () => {
       reasonCode: "snapshot_image_load_failed",
       status: "captured",
     });
+  });
+
+  it("allows raw html fallback only when snapshot capture found no website service", () => {
+    expect(
+      canUseSimpleHtmlSnapshotFallback(
+        {
+          kind: "website_screenshot",
+          status: "capture_unavailable",
+          reasonCode: "preview_start_command_missing",
+        },
+        { hasPreviewPath: true },
+      ),
+    ).toBe(true);
+
+    expect(
+      canUseSimpleHtmlSnapshotFallback(
+        {
+          kind: "website_screenshot",
+          status: "capture_failed",
+          reasonCode: "preview_port_not_ready",
+        },
+        { hasPreviewPath: true },
+      ),
+    ).toBe(false);
   });
 });
 

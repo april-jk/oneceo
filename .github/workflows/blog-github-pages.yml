@@ -46,7 +46,7 @@ jobs:
         run: pnpm --filter blog build
 
       - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v5
         with:
           path: apps/blog/dist
 

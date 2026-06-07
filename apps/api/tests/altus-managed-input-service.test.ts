@@ -626,3 +626,37 @@ test('submit does not duplicate deployment orchestrator skill when already expli
     },
   ]);
 });
+
+test('submit delegates the active-run constraint to the managed run creation boundary', async () => {
+  const outerActiveRunCheck = mock.method(taskSessionRunDAO, 'findActiveRun', async () => {
+    throw new Error('input service must not check active runs');
+  });
+  mock.method(userSkillService, 'listAvailableSkills', async () => []);
+  mock.method(userSkillService, 'resolveSelectionsForSession', async () => []);
+
+  const runService = {
+    startRun: mock.fn(async () => ({
+      id: 'run-after-stop',
+      sessionId: 'session-after-stop',
+      status: 'queued',
+    })),
+  };
+  const setupService = {
+    ensureSessionOwnership: mock.fn(async () => undefined),
+  };
+
+  const service = new AltusManagedInputService(
+    setupService as any,
+    runService as any,
+    mock.fn(async () => undefined) as any
+  );
+  const result = await service.submit('user-1', {
+    sessionId: 'session-after-stop',
+    content: '修正后的消息',
+    messageKey: 'msg-after-stop',
+  });
+
+  assert.equal(result.run?.id, 'run-after-stop');
+  assert.equal(outerActiveRunCheck.mock.callCount(), 0);
+  assert.equal(runService.startRun.mock.callCount(), 1);
+});

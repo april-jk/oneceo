@@ -3671,8 +3671,14 @@ private async chargeForModelCall(state: AltusRunState, input: {
 
   async execute(state: AltusRunState, abortController: AbortController) {
     try {
+      if (abortController.signal.aborted) {
+        throw new Error('managed_run_aborted');
+      }
       const preExecutionClarificationQuestion = this.resolvePreExecutionClarificationQuestion(state);
       if (preExecutionClarificationQuestion) {
+        if (abortController.signal.aborted) {
+          throw new Error('managed_run_aborted');
+        }
         const preExecutionClarificationOptions = this.resolvePreExecutionClarificationOptions(state);
         const preExecutionClarificationType = this.resolvePreExecutionClarificationType(state);
         const preExecutionStructuredClarification = this.resolvePreExecutionStructuredClarification(state);
@@ -3698,6 +3704,9 @@ private async chargeForModelCall(state: AltusRunState, input: {
       const userId = state.input.userId;
       if (userId) {
         const hasEnough = await billingService.hasEnoughCredits(userId, 0);
+        if (abortController.signal.aborted) {
+          throw new Error('managed_run_aborted');
+        }
         if (!hasEnough) {
           const credits = await billingService.getUserCredits(userId);
           await this.eventWriter.appendRunEvent(
@@ -3731,6 +3740,9 @@ private async chargeForModelCall(state: AltusRunState, input: {
           taskIntentProfile: state.input.taskIntentProfile,
         }
       );
+      if (abortController.signal.aborted) {
+        throw new Error('managed_run_aborted');
+      }
       const residentSkillSelections = Array.isArray(state.input.residentSkillSelections)
         ? state.input.residentSkillSelections
         : [];
@@ -3756,6 +3768,9 @@ private async chargeForModelCall(state: AltusRunState, input: {
           orchestratorSessionId: sandbox.sandboxId,
           skills: state.input.skills,
         });
+      }
+      if (abortController.signal.aborted) {
+        throw new Error('managed_run_aborted');
       }
       if (residentSelectionsForSync.length > 0) {
         writeConnectorDebugLog('[ALTUS_RUN_SKILL_SYNC_READY]', {
@@ -3809,6 +3824,9 @@ private async chargeForModelCall(state: AltusRunState, input: {
         });
       }
       await this.lifecycleService.markRunning(state);
+      if (abortController.signal.aborted) {
+        throw new Error('managed_run_aborted');
+      }
 
       const result = await this.runModelLoop(state, abortController.signal);
       if (result.outcome === 'waiting_user') {
@@ -3828,9 +3846,22 @@ private async chargeForModelCall(state: AltusRunState, input: {
     } catch (error) {
       if (abortController.signal.aborted || asText((error as Error)?.message) === 'managed_run_aborted') {
         state.markStopped('user_interrupt');
-        await this.flushSandboxSkillMemory(state, 'stopped');
-        await this.flushSandboxAltusMemory(state, 'stopped');
         await this.lifecycleService.markStopped(state, 'user_interrupt');
+        void Promise.allSettled([
+          this.flushSandboxSkillMemory(state, 'stopped'),
+          this.flushSandboxAltusMemory(state, 'stopped'),
+        ]).then((results) => {
+          const labels = ['skill_memory', 'altus_memory'];
+          results.forEach((result, index) => {
+            if (result.status !== 'rejected') return;
+            console.warn('[ALTUS_RUN_STOPPED_MEMORY_FLUSH_WARN]', {
+              sessionId: state.input.sessionId,
+              runId: state.input.runId,
+              target: labels[index],
+              error: result.reason instanceof Error ? result.reason.message : String(result.reason),
+            });
+          });
+        });
         return;
       }
 

@@ -37,6 +37,7 @@ import { membershipService } from './membership-service';
 
 export class AltusManagedRunEntryService {
   private readonly controllers = new Map<string, AbortController>();
+  private readonly executions = new Map<string, Promise<void>>();
   private readonly heartbeatTimers = new Map<string, NodeJS.Timeout>();
 
   constructor(
@@ -317,10 +318,13 @@ export class AltusManagedRunEntryService {
     this.controllers.set(run.id, abortController);
     this.startHeartbeat(run.id, sessionId, userId);
 
-    void this.coordinator.execute(state, abortController).finally(() => {
+    const execution = this.coordinator.execute(state, abortController).finally(() => {
       this.controllers.delete(run.id);
+      this.executions.delete(run.id);
       this.stopHeartbeat(run.id);
     });
+    this.executions.set(run.id, execution);
+    void execution;
 
     return this.eventWriter.toSummary(run);
   }
@@ -361,7 +365,15 @@ export class AltusManagedRunEntryService {
     const controller = this.controllers.get(runId);
     if (controller) {
       controller.abort(reason || 'user_interrupt');
-      return this.eventWriter.toSummary((await taskSessionRunDAO.getRun(runId)) || run);
+      const execution = this.executions.get(runId);
+      if (execution) {
+        await execution;
+      }
+      const stoppedRun = (await taskSessionRunDAO.getRun(runId)) || run;
+      if (!isManagedRunTerminalStatus(stoppedRun.status)) {
+        throw new Error('managed run 中止未完成');
+      }
+      return this.eventWriter.toSummary(stoppedRun);
     }
 
     const state = new AltusRunState({

@@ -1,5 +1,4 @@
 import { randomUUID } from 'node:crypto';
-import { taskSessionRunDAO } from '../db/dao';
 import { e2bConnector } from '../connectors/e2b-connector';
 import { markSandboxDirty } from './sandbox-activity-service';
 import { altusManagedRunService, type AltusManagedRunService } from './altus-managed-run-service';
@@ -195,11 +194,6 @@ export class AltusManagedInputService {
       sessionId,
       userId,
     });
-    const activeRun = await taskSessionRunDAO.findActiveRun(sessionId);
-    if (activeRun) {
-      throw new Error('当前会话已有运行中的 Altus managed run');
-    }
-
     const availableSkills = await userSkillService.listAvailableSkills(userId);
     writeConnectorDebugLog('[ALTUS_MANAGED_SUBMIT_AVAILABLE_SKILLS_READY]', {
       sessionId,

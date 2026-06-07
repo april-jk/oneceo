@@ -474,7 +474,7 @@ function isManagedRunActiveStatus(value: unknown): boolean {
   );
 }
 
-function isManagedRunTerminalStatus(value: unknown): boolean {
+export function isManagedRunTerminalStatus(value: unknown): boolean {
   const normalized = normalizeManagedRunStatus(value);
   return Boolean(
     normalized &&
@@ -3090,16 +3090,21 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         }
         setIsInterrupting(true);
         try {
-          await stopTaskCreationManagedRun(activeRunId, {
+          const stoppedRun = await stopTaskCreationManagedRun(activeRunId, {
             reason: 'user_interrupt',
             clientMessageKey: activeProcessingMessageKeyRef.current || undefined,
           });
-          setManagedRunStatus('stopped');
+          const stoppedStatus = normalizeManagedRunStatus(stoppedRun?.status);
+          if (!isManagedRunTerminalStatus(stoppedStatus)) {
+            throw new Error('managed run 中止未完成');
+          }
+          setManagedRunStatus(stoppedStatus);
           setManagedRunStreaming(false);
           setIsProcessing(false);
           activeProcessingMessageKeyRef.current = null;
           setCurrentQuestion(null);
           setManagedRunError(null);
+          clearManagedRunRecoveryState(activeSessionId);
           closeManagedRunStreamRef.current();
           setMessages((prev) =>
             mergeRealtimeMessage(

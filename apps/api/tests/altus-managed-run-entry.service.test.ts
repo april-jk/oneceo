@@ -956,7 +956,8 @@ test('stopRun aborts active controller for in-flight run', async () => {
     residentSelectionsForSync: [],
   }) as any);
   mock.method(taskSessionRunDAO, 'createRun', async () => run as any);
-  mock.method(taskSessionRunDAO, 'getRun', async () => run as any);
+  let persistedRun = run;
+  mock.method(taskSessionRunDAO, 'getRun', async () => persistedRun as any);
 
   const setupService = {
     ensureSessionOwnership: mock.fn(async () => {}),
@@ -1009,6 +1010,7 @@ test('stopRun aborts active controller for in-flight run', async () => {
   };
 
   let capturedAbortController: AbortController | null = null;
+  let stopPersistenceCompleted = false;
   const coordinator = {
     execute: mock.fn((_: any, abortController: AbortController) => {
       capturedAbortController = abortController;
@@ -1016,7 +1018,16 @@ test('stopRun aborts active controller for in-flight run', async () => {
         abortController.signal.addEventListener(
           'abort',
           () => {
-            resolve();
+            setTimeout(() => {
+              persistedRun = {
+                ...run,
+                status: 'stopped',
+                stopReason: 'user_interrupt',
+                completedAt: new Date('2026-03-24T04:00:01.000Z'),
+              };
+              stopPersistenceCompleted = true;
+              resolve();
+            }, 20);
           },
           { once: true }
         );
@@ -1069,7 +1080,9 @@ test('stopRun aborts active controller for in-flight run', async () => {
   const summary = await service.stopRun('run-2', 'user-2', 'user_interrupt');
 
   assert.equal(summary?.id, 'run-2');
+  assert.equal(summary?.status, 'stopped');
   assert.equal(capturedAbortController?.signal.aborted, true);
+  assert.equal(stopPersistenceCompleted, true);
 });
 
 test('getLatestRun falls back to db summary when recovery reconciliation throws', async () => {

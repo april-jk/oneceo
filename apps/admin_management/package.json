@@ -36,7 +36,7 @@
     "@types/node": "^24.10.0",
     "@types/react": "^19.2.2",
     "@types/react-dom": "^19.2.2",
-    "@vitejs/plugin-react": "^4.4.1",
+    "@vitejs/plugin-react": "^6.0.2",
     "concurrently": "^9.2.1",
     "tsx": "^4.20.6",
     "typescript": "^5.9.3",

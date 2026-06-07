@@ -1590,6 +1590,26 @@ export function resolveManagedStreamMessageKey(input: {
   );
 }
 
+export function resolveManagedRunStreamCursor(input: {
+  cursorRunId?: string | null;
+  targetRunId: string;
+  sequence?: number | null;
+}): { afterSequence?: number; resetSequence: boolean } {
+  const cursorRunId = asText(input.cursorRunId);
+  const targetRunId = asText(input.targetRunId);
+  const sequence =
+    typeof input.sequence === 'number' && Number.isFinite(input.sequence)
+      ? Math.max(0, Math.floor(input.sequence))
+      : 0;
+  if (!targetRunId || cursorRunId !== targetRunId) {
+    return { resetSequence: sequence > 0 || Boolean(cursorRunId) };
+  }
+  return {
+    ...(sequence > 0 ? { afterSequence: sequence } : {}),
+    resetSequence: false,
+  };
+}
+
 function resolveExplicitAgentMessageKey(message: Partial<AgentMessage>): string {
   if (asText(message.messageKey)) {
     return asText(message.messageKey);
@@ -2440,6 +2460,13 @@ export function mergeHistoryAgentMessages(base: AgentMessage[], incoming: AgentM
   return orderAgentMessagesByTimeline(merged);
 }
 
+export function mergeHistorySnapshotWithRealtime(
+  historyMessages: AgentMessage[],
+  realtimeMessages: AgentMessage[]
+): AgentMessage[] {
+  return mergeHistoryAgentMessages(historyMessages, realtimeMessages);
+}
+
 export function reconcileHistoryWithPendingLocalMessages(
   historyMessages: AgentMessage[],
   pendingLocalMessages: AgentMessage[]
@@ -2951,6 +2978,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
   const managedRunIdRef = useRef<string | null>(null);
   const managedRunStatusRef = useRef<string | null>(null);
   const managedRunSequenceRef = useRef<number>(0);
+  const managedRunSequenceRunIdRef = useRef<string | null>(null);
   const managedRunReconnectTimerRef = useRef<number | null>(null);
   const managedRunReconnectAttemptRef = useRef(0);
   const managedRunRefreshPollTimerRef = useRef<number | null>(null);
@@ -3030,6 +3058,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
     sseStreamLengthRef.current.clear();
     sseStreamSignatureRef.current.clear();
     managedRunSequenceRef.current = 0;
+    managedRunSequenceRunIdRef.current = null;
     managedRunStreamRunIdRef.current = null;
     closeManagedRunStreamRef.current();
     setSessionId(nextSessionId);
@@ -3315,6 +3344,7 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
     managedRunStreamRunIdRef.current = null;
     if (!options?.preserveSequence) {
       managedRunSequenceRef.current = 0;
+      managedRunSequenceRunIdRef.current = null;
     }
     managedRunReconnectAttemptRef.current = 0;
     setManagedRunStreaming(false);
@@ -3358,9 +3388,17 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
       clearManagedRunReconnectTimer();
       managedRunReconnectAttemptRef.current = 0;
 
-      const afterSequence = managedRunSequenceRef.current > 0 ? managedRunSequenceRef.current : undefined;
+      const cursor = resolveManagedRunStreamCursor({
+        cursorRunId: managedRunSequenceRunIdRef.current,
+        targetRunId: runId,
+        sequence: managedRunSequenceRef.current,
+      });
+      if (cursor.resetSequence) {
+        managedRunSequenceRef.current = 0;
+      }
+      managedRunSequenceRunIdRef.current = runId;
       const url = getTaskCreationManagedRunStreamUrl(runId, {
-        afterSequence,
+        afterSequence: cursor.afterSequence,
         clientId: sseClientIdRef.current,
         userId: user?.id || null,
       });
@@ -3441,12 +3479,13 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         asPositiveInt(envelope.sequence) ??
         asPositiveInt(envelope.payload?.sequence) ??
         (typeof lastEventId === 'string' ? asPositiveInt(lastEventId) : null);
-      if (sequence !== null && sequence > 0) {
-        managedRunSequenceRef.current = Math.max(managedRunSequenceRef.current, sequence);
-      }
 
       const payload = toRecord(envelope.payload);
       const runId = asText(payload.runId) || asText(envelope.runId) || managedRunStreamRunIdRef.current || '';
+      if (sequence !== null && sequence > 0) {
+        managedRunSequenceRunIdRef.current = runId || managedRunSequenceRunIdRef.current;
+        managedRunSequenceRef.current = Math.max(managedRunSequenceRef.current, sequence);
+      }
       const sessionKey = asText(payload.sessionId) || asText(envelope.sessionId) || sessionId || undefined;
       const managedStatus = normalizeManagedRunStatus(payload.status || envelope.status || payload.runStatus || envelope.runStatus);
       if (runId) {
@@ -3642,7 +3681,11 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
       }
 
       if (nextMessage) {
-        setMessages((prev) => mergeRealtimeMessage(prev, nextMessage as AgentMessage, WELCOME_MESSAGE));
+        setMessages((prev) => {
+          const next = mergeRealtimeMessage(prev, nextMessage as AgentMessage, WELCOME_MESSAGE);
+          messagesRef.current = next;
+          return next;
+        });
       }
 
       if (sessionKey && nextSessionStatus) {
@@ -4395,9 +4438,9 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
   }, [clearReconnectTimer]);
 
   // 回答澄清问题
-  const answerQuestion = useCallback((answer: string, options?: SendInputOptions) => {
+  const answerQuestion = useCallback(async (answer: string, options?: SendInputOptions) => {
     if (isManagedAltusMode()) {
-      void sendChatInputRef.current(answer, {
+      await sendChatInputRef.current(answer, {
         ...(options || {}),
         sessionId: options?.sessionId || sessionId || undefined,
       });
@@ -4569,7 +4612,15 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
       if (activeHistorySessionRef.current && activeHistorySessionRef.current !== historySessionId) {
         return;
       }
-      const mergedWithPending = mergeWithPendingLocalMessages(historySessionId, normalized);
+      const mergedWithRealtime = mergeHistorySnapshotWithRealtime(
+        normalized,
+        messagesRef.current
+      );
+      const mergedWithPending = mergeWithPendingLocalMessages(
+        historySessionId,
+        mergedWithRealtime
+      );
+      messagesRef.current = mergedWithPending;
       setMessages(mergedWithPending);
       if (typeof options?.hasOlderHistory === 'boolean') {
         setHasOlderHistory(options.hasOlderHistory);
@@ -4612,10 +4663,15 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
         ? mergeWithPendingLocalMessages(historySessionId, cached.messages)
         : null;
       if (cached) {
+        const cachedWithRealtime = mergeHistorySnapshotWithRealtime(
+          cachedMessages || cached.messages,
+          messagesRef.current
+        );
         oldestHistoryCursorRef.current = cached.oldestCursor;
         setHasOlderHistory(cached.hasOlderHistory);
-        setMessages(cachedMessages || cached.messages);
-        syncQuestionAndRuntimeState(cachedMessages || cached.messages);
+        messagesRef.current = cachedWithRealtime;
+        setMessages(cachedWithRealtime);
+        syncQuestionAndRuntimeState(cachedWithRealtime);
       }
       try {
         const recent = await getTaskCreationRecentMessages(historySessionId);
@@ -4943,9 +4999,6 @@ export function useTaskCreationAgent(options?: UseTaskCreationAgentOptions) {
           status: nextStatus,
           processing: nextStatus !== 'waiting_user' && isManagedRunActiveStatus(nextStatus),
         });
-        if (typeof latest.sequence === 'number' && Number.isFinite(latest.sequence) && latest.sequence > 0) {
-          managedRunSequenceRef.current = Math.floor(latest.sequence);
-        }
         if (isManagedRunActiveStatus(nextStatus)) {
           openManagedRunStreamRef.current(nextRunId);
           setManagedRunStreaming(true);

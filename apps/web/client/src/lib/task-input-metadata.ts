@@ -16,6 +16,7 @@ export type ManagedTaskInputMetadata = {
   mcpReferences?: TaskCreationMcpReference[];
   modelTier?: AgentModelTier;
   originalInput: string;
+  [key: string]: unknown;
 };
 
 export function buildManagedTaskInputMetadata(input: {
@@ -24,6 +25,7 @@ export function buildManagedTaskInputMetadata(input: {
   mcpReferences: TaskCreationMcpReference[];
   fileCount: number;
   modelTier?: AgentModelTier;
+  additionalMetadata?: Record<string, unknown>;
 }): ManagedTaskInputMetadata | undefined {
   const fileCount = Number.isFinite(input.fileCount)
     ? Math.max(0, Math.floor(input.fileCount))
@@ -34,11 +36,12 @@ export function buildManagedTaskInputMetadata(input: {
     input.modelTier || DEFAULT_AGENT_MODEL_TIER,
   );
 
-  if (!hasReferences && !modelTier) {
+  if (!hasReferences && !modelTier && !input.additionalMetadata) {
     return undefined;
   }
 
   return {
+    ...(input.additionalMetadata || {}),
     ...(input.skills.length ? { skills: input.skills } : {}),
     ...(input.mcpReferences.length
       ? { mcpReferences: input.mcpReferences }

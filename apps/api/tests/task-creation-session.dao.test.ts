@@ -35,6 +35,11 @@ test('sanitizeTimelineMetadataForStorage preserves attachment metadata needed fo
       taskType: 'ppt',
       cards: [],
     },
+    source: 'structured_clarification_answer',
+    clarificationMessageKey: 'managed:run-ppt:clarification',
+    structuredClarificationAnswer: {
+      planTitle: '沐曦股份 PPT 制作前确认关键决策',
+    },
     unsafeField: 'drop-me',
   });
 
@@ -65,6 +70,11 @@ test('sanitizeTimelineMetadataForStorage preserves attachment metadata needed fo
       kind: 'structured_clarification',
       taskType: 'ppt',
       cards: [],
+    },
+    source: 'structured_clarification_answer',
+    clarificationMessageKey: 'managed:run-ppt:clarification',
+    structuredClarificationAnswer: {
+      planTitle: '沐曦股份 PPT 制作前确认关键决策',
     },
   });
 });

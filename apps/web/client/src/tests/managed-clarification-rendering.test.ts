@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { buildChatItems, getActiveManagedStatusText, type ChatItem } from '@/pages/Home';
-import type { AgentMessage } from '@/hooks/useTaskCreationAgent';
+import {
+  mergeHistorySnapshotWithRealtime,
+  type AgentMessage,
+} from '@/hooks/useTaskCreationAgent';
 
 describe('managed clarification rendering', () => {
   it('renders structured clarification card plans as interactive chat items', () => {
@@ -61,6 +64,118 @@ describe('managed clarification rendering', () => {
     expect(structuredItems).toHaveLength(1);
     expect(structuredItems[0]?.plan.cards).toHaveLength(1);
     expect(structuredItems[0]?.plan.cards[0]?.options[0]?.label).toBe('投资人融资路演');
+  });
+
+  it('does not render a structured clarification card after its linked answer is persisted', () => {
+    const clarificationMessageKey = 'managed:run-ppt-answered:clarification';
+    const messages: AgentMessage[] = [
+      {
+        type: 'clarification_request',
+        content: '这份 PPT 开始制作前，先确认关键决策。',
+        question: '这份 PPT 开始制作前，先确认关键决策。',
+        messageKey: clarificationMessageKey,
+        metadata: {
+          runId: 'run-ppt-answered',
+          eventType: 'clarification_requested',
+          structuredClarification: {
+            kind: 'structured_clarification',
+            taskType: 'ppt',
+            title: 'PPT 制作前确认',
+            maxCards: 4,
+            cards: [
+              {
+                id: 'style',
+                title: '视觉风格',
+                question: '选择视觉风格',
+                selectionMode: 'single',
+                required: true,
+                allowOther: true,
+                allowNote: false,
+                options: [
+                  {
+                    id: 'tech',
+                    label: '科技投研风',
+                    description: '专业克制',
+                    impact: '提升数据密度',
+                    recommended: true,
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      },
+      {
+        type: 'user_response',
+        content: '已确认需求（结构化澄清选择）',
+        messageKey: 'managed:run-ppt-answer:user_response',
+        metadata: {
+          source: 'structured_clarification_answer',
+          clarificationMessageKey,
+          structuredClarificationAnswer: {
+            planTitle: 'PPT 制作前确认',
+          },
+        },
+      },
+    ];
+
+    const items = buildChatItems(messages);
+
+    expect(items.some((item) => item.kind === 'structured_clarification')).toBe(false);
+    expect(
+      items.some(
+        (item): item is Extract<ChatItem, { kind: 'user' }> =>
+          item.kind === 'user' && item.text.includes('已确认需求')
+      )
+    ).toBe(true);
+  });
+
+  it('keeps a structured clarification card when a later user message is unrelated', () => {
+    const messages: AgentMessage[] = [
+      {
+        type: 'clarification_request',
+        content: '请确认 PPT 风格。',
+        question: '请确认 PPT 风格。',
+        messageKey: 'managed:run-ppt-open:clarification',
+        metadata: {
+          runId: 'run-ppt-open',
+          eventType: 'clarification_requested',
+          structuredClarification: {
+            kind: 'structured_clarification',
+            taskType: 'ppt',
+            title: 'PPT 制作前确认',
+            maxCards: 4,
+            cards: [
+              {
+                id: 'style',
+                title: '视觉风格',
+                question: '选择视觉风格',
+                selectionMode: 'single',
+                options: [
+                  {
+                    id: 'tech',
+                    label: '科技投研风',
+                    recommended: true,
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      },
+      {
+        type: 'user_response',
+        content: '普通补充信息',
+        messageKey: 'user-unrelated',
+        metadata: {
+          source: 'chat',
+        },
+      },
+    ];
+
+    const items = buildChatItems(messages);
+
+    expect(items.some((item) => item.kind === 'structured_clarification')).toBe(true);
   });
 
   it('shows only clarification notice when clarification repeats previous assistant text', () => {
@@ -171,6 +286,62 @@ describe('managed clarification rendering', () => {
           item.kind === 'agent' && item.markdown.includes('**需要补充信息**')
       )
     ).toBe(false);
+  });
+
+  it('does not let a stale history snapshot remove a realtime clarification card', () => {
+    const userMessage: AgentMessage = {
+      type: 'user_input',
+      content: '制作一个介绍端午节的 ppt',
+      messageKey: 'user-ppt-race',
+    };
+    const clarification: AgentMessage = {
+      type: 'clarification_request',
+      content: '这份 PPT 开始制作前，先确认关键决策。',
+      question: '这份 PPT 开始制作前，先确认关键决策。',
+      messageKey: 'managed:run-ppt-race:clarification',
+      metadata: {
+        runId: 'run-ppt-race',
+        eventType: 'clarification_requested',
+        clarificationType: 'presentation_brief',
+        structuredClarification: {
+          kind: 'structured_clarification',
+          taskType: 'ppt',
+          title: '端午节 PPT 制作前确认',
+          summary: '先确认受众。',
+          maxCards: 1,
+          briefFields: ['purpose_audience'],
+          cards: [
+            {
+              id: 'purpose_audience',
+              title: '演示目的与受众',
+              question: '这份 PPT 主要给谁看？',
+              why: '决定叙事角度',
+              selectionMode: 'single',
+              required: true,
+              allowOther: true,
+              allowNote: false,
+              options: [
+                {
+                  id: 'general',
+                  label: '大众科普',
+                  description: '面向普通观众',
+                  impact: '采用易懂的节日文化叙事。',
+                  recommended: true,
+                },
+              ],
+            },
+          ],
+        },
+      },
+    };
+
+    const merged = mergeHistorySnapshotWithRealtime(
+      [userMessage],
+      [userMessage, clarification]
+    );
+
+    expect(merged.some((message) => message.messageKey === clarification.messageKey)).toBe(true);
+    expect(buildChatItems(merged).some((item) => item.kind === 'structured_clarification')).toBe(true);
   });
 
   it('hides mcp confirmation approval markers from rendered user messages', () => {

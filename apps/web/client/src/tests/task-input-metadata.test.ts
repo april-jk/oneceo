@@ -83,4 +83,30 @@ describe("buildManagedTaskInputMetadata", () => {
       originalInput: "run with max tier",
     });
   });
+
+  it("preserves structured clarification answer linkage metadata", () => {
+    expect(
+      buildManagedTaskInputMetadata({
+        originalInput: "confirmed brief",
+        skills: [],
+        mcpReferences: [],
+        fileCount: 0,
+        additionalMetadata: {
+          source: "structured_clarification_answer",
+          clarificationMessageKey: "managed:run-1:clarification",
+          structuredClarificationAnswer: {
+            planTitle: "PPT 制作前确认",
+          },
+        },
+      }),
+    ).toEqual({
+      source: "structured_clarification_answer",
+      clarificationMessageKey: "managed:run-1:clarification",
+      structuredClarificationAnswer: {
+        planTitle: "PPT 制作前确认",
+      },
+      modelTier: "lite",
+      originalInput: "confirmed brief",
+    });
+  });
 });

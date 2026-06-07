@@ -9,6 +9,7 @@ import {
   useState,
   useRef,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useCallback,
   type ClipboardEvent,
@@ -1040,6 +1041,15 @@ function escapeMessageKeySelector(value: string): string {
   return value.replace(/["\\]/g, "\\$&");
 }
 
+export function followChatTail(
+  container: Pick<HTMLElement, "scrollTop" | "scrollHeight">,
+  enabled: boolean,
+): boolean {
+  if (!enabled) return false;
+  container.scrollTop = container.scrollHeight;
+  return true;
+}
+
 function readPersistedScrollAnchor(
   raw: string | null,
 ): PersistedMessageScrollAnchor | null {
@@ -1272,7 +1282,6 @@ export default function Home() {
   >([]);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const isMobile = useIsMobile();
-  const messagesEndRef = useRef<HTMLDivElement>(null);
   const messageScrollRef = useRef<HTMLDivElement>(null);
   const pendingInputRef = useRef<string | null>(null);
   const prependRestoreRef = useRef<{
@@ -1903,15 +1912,13 @@ export default function Home() {
     setSlashActiveIndex(0);
   }, [message, slashSuggestions.length]);
 
-  // 自动滚动到最新消息
-  useEffect(() => {
+  // 实时步骤会高频更新，直接移动消息容器，避免平滑滚动动画反复重启造成闪回。
+  useLayoutEffect(() => {
     const container = messageScrollRef.current;
     if (mode !== "chat" || !container) {
       return;
     }
-    if (stickToBottomRef.current) {
-      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-    }
+    followChatTail(container, stickToBottomRef.current);
   }, [messages, mode, sessionId]);
 
   useEffect(() => {
@@ -2637,7 +2644,10 @@ export default function Home() {
     setMessage("");
   };
 
-  async function submitQuestionAnswer(rawInput: string) {
+  async function submitQuestionAnswer(
+    rawInput: string,
+    responseMetadata?: Record<string, unknown>,
+  ): Promise<boolean> {
     const trimmed = rawInput.trim();
     const attachmentDrafts = [...attachments];
     const referenceDrafts = [...composerReferences];
@@ -2655,7 +2665,7 @@ export default function Home() {
         : hasReferences
           ? t("homeWorkspace.processReferencedAbilities")
           : "");
-    if (!baseText) return;
+    if (!baseText) return false;
 
     const altusMode = readAltusMode();
     const activeSessionId = (sessionId || "").trim() || undefined;
@@ -2716,6 +2726,7 @@ export default function Home() {
             skills: mergedSkills,
             mcpReferences: selectedMcp,
             fileCount: uploadableAttachments.length,
+            additionalMetadata: responseMetadata,
           }),
           files: uploadableAttachments.length
             ? uploadableAttachments.map((item) => item.file)
@@ -2751,6 +2762,7 @@ export default function Home() {
         clearAttachmentUploadState(uploadableAttachments.map((item) => item.id));
         setAttachments([]);
       }
+      return true;
     } catch (error) {
       if (hasAttachments) {
         const draftFiles = attachmentDrafts
@@ -2778,12 +2790,25 @@ export default function Home() {
       if (isInsufficientCreditsError(error)) {
         void refreshCreditsRef.current();
       }
+      return false;
     }
   }
 
   const handleAnswerQuestion = (answer: string) => {
     void submitQuestionAnswer(answer);
   };
+
+  const handleStructuredClarificationSubmit = async (
+    answer: string,
+    context: { clarificationMessageKey?: string; planTitle: string },
+  ) =>
+    submitQuestionAnswer(answer, {
+      source: "structured_clarification_answer",
+      clarificationMessageKey: context.clarificationMessageKey,
+      structuredClarificationAnswer: {
+        planTitle: context.planTitle,
+      },
+    });
 
   const quickActionLabels = t("homeWorkspace.quickActions", {
     returnObjects: true,
@@ -3682,7 +3707,9 @@ export default function Home() {
                   onRejectGoogleWorkspaceConfirmation={
                     rejectGoogleWorkspaceConfirmation
                   }
-                  onSubmitStructuredClarification={handleAnswerQuestion}
+                  onSubmitStructuredClarification={
+                    handleStructuredClarificationSubmit
+                  }
                 />
               ))}
             </AnimatePresence>
@@ -3695,7 +3722,7 @@ export default function Home() {
               />
             )}
 
-            <div ref={messagesEndRef} />
+            <div />
           </div>
         </div>
 
@@ -4922,6 +4949,7 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
   const buildClarificationSemanticKey = (value: string): string =>
     normalizeClarificationComparableText(value).replace(/\s+/g, "");
   const userTextSet = new Set<string>();
+  const answeredStructuredClarificationKeys = new Set<string>();
   const finalizedPartIds = new Set<string>();
   const codexTurnFilePaths = new Map<string, string[]>();
   const lastCodexDiffIndexByTurn = new Map<string, number>();
@@ -4956,6 +4984,17 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
     if (message.type === "user_input" || message.type === "user_response") {
       const normalized = normalizeForDedup(message.content || "");
       if (normalized) userTextSet.add(normalized);
+      const metadata = toRecord(message.metadata);
+      if (
+        asText(metadata.source) === "structured_clarification_answer"
+      ) {
+        const clarificationMessageKey = asText(
+          metadata.clarificationMessageKey,
+        );
+        if (clarificationMessageKey) {
+          answeredStructuredClarificationKeys.add(clarificationMessageKey);
+        }
+      }
       continue;
     }
     if (message.type !== "opencode_event") continue;
@@ -5964,6 +6003,12 @@ function buildLegacyChatItems(messages: AgentMessage[]): ChatItem[] {
         message.metadata,
       );
       if (structuredClarification) {
+        if (
+          message.messageKey &&
+          answeredStructuredClarificationKeys.has(message.messageKey)
+        ) {
+          continue;
+        }
         items.push({
           kind: "structured_clarification",
           question,
@@ -6949,9 +6994,15 @@ function StructuredClarificationCardFlow({
   onSubmit,
 }: {
   item: Extract<ChatItem, { kind: "structured_clarification" }>;
-  onSubmit?: (answer: string) => void;
+  onSubmit?: (
+    answer: string,
+    context: { clarificationMessageKey?: string; planTitle: string },
+  ) => Promise<boolean>;
 }) {
   const [activeIndex, setActiveIndex] = useState(0);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
+  const submittingRef = useRef(false);
   const [answers, setAnswers] = useState<
     Record<string, { selected: string[]; other: string; note: string; skipped?: boolean }>
   >({});
@@ -6959,7 +7010,7 @@ function StructuredClarificationCardFlow({
   const activeCard = cards[Math.min(activeIndex, Math.max(0, cards.length - 1))];
   const progress = cards.length > 0 ? Math.round(((activeIndex + 1) / cards.length) * 100) : 0;
 
-  if (!activeCard) return null;
+  if (!activeCard || submitted) return null;
 
   const currentAnswer = answers[activeCard.id] || {
     selected: activeCard.options.find((option) => option.recommended)?.id
@@ -6980,6 +7031,7 @@ function StructuredClarificationCardFlow({
   };
 
   const toggleOption = (optionId: string) => {
+    if (submitting) return;
     if (activeCard.selectionMode === "multiple") {
       const selected = currentAnswer.selected.includes(optionId)
         ? currentAnswer.selected.filter((id) => id !== optionId)
@@ -7019,7 +7071,8 @@ function StructuredClarificationCardFlow({
   const customSelected = Boolean(customOption && currentAnswer.selected.includes(customOption.id));
   const customMissing = customSelected && !currentAnswer.other.trim();
 
-  const goNext = (skip = false) => {
+  const goNext = async (skip = false) => {
+    if (submittingRef.current) return;
     if (!skip && customMissing) return;
     const nextAnswers = {
       ...answers,
@@ -7034,7 +7087,24 @@ function StructuredClarificationCardFlow({
       setActiveIndex((value) => value + 1);
       return;
     }
-    onSubmit?.(buildSubmittedBrief(nextAnswers));
+    if (!onSubmit) return;
+    submittingRef.current = true;
+    setSubmitting(true);
+    let succeeded = false;
+    try {
+      succeeded = await onSubmit(buildSubmittedBrief(nextAnswers), {
+        clarificationMessageKey: item.messageKey,
+        planTitle: item.plan.title,
+      });
+    } catch {
+      succeeded = false;
+    }
+    if (succeeded) {
+      setSubmitted(true);
+      return;
+    }
+    submittingRef.current = false;
+    setSubmitting(false);
   };
 
   return (
@@ -7082,6 +7152,7 @@ function StructuredClarificationCardFlow({
                   key={option.id}
                   type="button"
                   onClick={() => toggleOption(option.id)}
+                  disabled={submitting}
                   className={`min-h-[64px] rounded-lg border px-3 py-2 text-left transition ${
                     selected
                       ? "border-ring bg-primary/5 shadow-[0_0_0_2px_rgba(9,105,218,0.10)]"
@@ -7126,6 +7197,7 @@ function StructuredClarificationCardFlow({
             <input
               value={currentAnswer.other}
               onChange={(event) => updateAnswer({ other: event.target.value, skipped: false })}
+              disabled={submitting}
               placeholder={activeCard.notePlaceholder || "输入你的自定义答案"}
               className="h-9 w-full rounded-lg border border-border/70 bg-background/85 px-3 text-sm text-foreground outline-none transition focus:border-ring focus:ring-2 focus:ring-ring/15"
             />
@@ -7138,7 +7210,8 @@ function StructuredClarificationCardFlow({
             variant="ghost"
             size="sm"
             className="h-8 rounded-lg px-3 text-xs font-semibold"
-            onClick={() => goNext(true)}
+            onClick={() => void goNext(true)}
+            disabled={submitting}
           >
             跳过
           </Button>
@@ -7146,10 +7219,14 @@ function StructuredClarificationCardFlow({
             type="button"
             size="sm"
             className="h-8 rounded-lg px-4 text-xs font-semibold"
-            onClick={() => goNext(false)}
-            disabled={customMissing}
+            onClick={() => void goNext(false)}
+            disabled={customMissing || submitting}
           >
-            {activeIndex < cards.length - 1 ? "下一项" : "完成确认"}
+            {submitting
+              ? "提交中..."
+              : activeIndex < cards.length - 1
+                ? "下一项"
+                : "完成确认"}
           </Button>
         </div>
       </div>
@@ -7193,7 +7270,10 @@ function MessageBubble({
   onRejectGoogleWorkspaceConfirmation?: (
     confirmation: GoogleWorkspaceConfirmationView,
   ) => Promise<void> | void;
-  onSubmitStructuredClarification?: (answer: string) => void;
+  onSubmitStructuredClarification?: (
+    answer: string,
+    context: { clarificationMessageKey?: string; planTitle: string },
+  ) => Promise<boolean>;
 }) {
   if (item.kind === "opencode_turn") {
     return (

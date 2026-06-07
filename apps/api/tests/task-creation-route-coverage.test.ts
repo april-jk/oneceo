@@ -376,6 +376,11 @@ test('session messages preserve structured clarification metadata for PPT cards'
         question: '这份 PPT 开始制作前，先确认 4 个关键决策。',
         clarificationType: 'presentation_brief',
         structuredClarification,
+        source: 'structured_clarification_answer',
+        clarificationMessageKey: 'managed:run-ppt:clarification',
+        structuredClarificationAnswer: {
+          planTitle: '沐曦股份 PPT 制作前确认关键决策',
+        },
         runId: 'run-ppt',
         eventType: 'clarification_requested',
         ignoredInternalField: 'should-not-leak',
@@ -408,6 +413,14 @@ test('session messages preserve structured clarification metadata for PPT cards'
     assert.equal(payload.data?.[0]?.messageType, 'clarification_request');
     assert.equal(payload.data?.[0]?.metadata?.clarificationType, 'presentation_brief');
     assert.deepEqual(payload.data?.[0]?.metadata?.structuredClarification, structuredClarification);
+    assert.equal(payload.data?.[0]?.metadata?.source, 'structured_clarification_answer');
+    assert.equal(
+      payload.data?.[0]?.metadata?.clarificationMessageKey,
+      'managed:run-ppt:clarification'
+    );
+    assert.deepEqual(payload.data?.[0]?.metadata?.structuredClarificationAnswer, {
+      planTitle: '沐曦股份 PPT 制作前确认关键决策',
+    });
     assert.equal(payload.data?.[0]?.metadata?.ignoredInternalField, undefined);
   } finally {
     await server.close();

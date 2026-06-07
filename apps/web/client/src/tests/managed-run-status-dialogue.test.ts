@@ -11,6 +11,7 @@ import {
   groupManagedActivityItems,
   resolveManagedToolReplayView,
   seedManagedVisualDebugActionKeys,
+  shouldShowProcessingNotice,
   type ChatItem,
 } from "@/pages/Home";
 import type { AgentMessage } from "@/hooks/useTaskCreationAgent";
@@ -93,6 +94,27 @@ function createManagedTodoWriteMessage(
 }
 
 describe("managed run status dialogue", () => {
+  it("does not keep the processing notice alive from stale status text after completion", () => {
+    expect(
+      shouldShowProcessingNotice({
+        isProcessing: false,
+        hasCurrentQuestion: false,
+      }),
+    ).toBe(false);
+    expect(
+      shouldShowProcessingNotice({
+        isProcessing: true,
+        hasCurrentQuestion: false,
+      }),
+    ).toBe(true);
+    expect(
+      shouldShowProcessingNotice({
+        isProcessing: true,
+        hasCurrentQuestion: true,
+      }),
+    ).toBe(false);
+  });
+
   it("routes managed tool clicks to the matching replay drawer view", () => {
     expect(resolveManagedToolReplayView("write_file")).toBe("actions");
     expect(resolveManagedToolReplayView("debug_open_page")).toBe("debug");

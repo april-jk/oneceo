@@ -3714,7 +3714,10 @@ export default function Home() {
               ))}
             </AnimatePresence>
 
-            {(isProcessing || Boolean(managedProcessingText)) && !currentQuestion && (
+            {shouldShowProcessingNotice({
+              isProcessing,
+              hasCurrentQuestion: Boolean(currentQuestion),
+            }) && (
               <NoticeMessage
                 tone="info"
                 icon={<Loader2 className="w-4 h-4 animate-spin" />}
@@ -6120,6 +6123,13 @@ export function getActiveManagedStatusText(items: ChatItem[]): string {
     }
   }
   return "";
+}
+
+export function shouldShowProcessingNotice(input: {
+  isProcessing: boolean;
+  hasCurrentQuestion: boolean;
+}): boolean {
+  return input.isProcessing && !input.hasCurrentQuestion;
 }
 
 type ManagedActivityTimelineItem = Extract<

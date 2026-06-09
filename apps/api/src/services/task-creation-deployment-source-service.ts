@@ -1016,6 +1016,14 @@ async function ensureOfficialFrontendWebShell(sourceDir: string) {
     return false;
   }
 
+  // 冲突检测：如果项目已有自定义 server 目录或 client 子目录结构，不强制重写，避免覆盖用户代码
+  const hasExistingServerDir = await exists(join(sourceDir, 'server'));
+  const hasExistingClientSrc = await exists(join(sourceDir, 'client', 'src'));
+  const hasExistingClientPublic = await exists(join(sourceDir, 'client', 'public'));
+  if (hasExistingServerDir || hasExistingClientSrc || hasExistingClientPublic) {
+    return false;
+  }
+
   await mkdir(join(sourceDir, 'client'), { recursive: true });
   await mkdir(join(sourceDir, 'server'), { recursive: true });
   await mkdir(join(sourceDir, 'shared'), { recursive: true });
@@ -1729,11 +1737,23 @@ async function runRailwayUpFromDirectory(input: {
       const stderr = typeof error?.stderr === 'string' ? error.stderr.trim() : '';
       const raw = stderr || stdout || error?.message || 'Railway 直传部署失败';
       const normalized = raw.toLowerCase();
-      const shouldRetry =
-        attempt < maxAttempts &&
-        (normalized.includes('failed to upload code with status code 404') ||
-          normalized.includes('status code 404 not found') ||
-          normalized.includes('service not found'));
+      const isRetryableError =
+        normalized.includes('failed to upload code with status code 404') ||
+        normalized.includes('status code 404 not found') ||
+        normalized.includes('service not found') ||
+        normalized.includes('status code 502') ||
+        normalized.includes('status code 503') ||
+        normalized.includes('status code 504') ||
+        normalized.includes('bad gateway') ||
+        normalized.includes('gateway timeout') ||
+        normalized.includes('eof') ||
+        normalized.includes('connection reset') ||
+        normalized.includes('network error') ||
+        normalized.includes('timeout') ||
+        normalized.includes('temporarily unavailable') ||
+        normalized.includes('too many requests') ||
+        normalized.includes('status code 429');
+      const shouldRetry = attempt < maxAttempts && isRetryableError;
       if (!shouldRetry) {
         throw new Error(raw);
       }

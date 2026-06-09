@@ -969,10 +969,14 @@ async function probePublicUrlDetailed(
   url: string,
 ): Promise<{ status: number; excerpt?: string }> {
   try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 10_000);
     const response = await fetch(url, {
       method: 'GET',
       redirect: 'follow',
+      signal: controller.signal,
     });
+    clearTimeout(timer);
     const contentType = asText(response.headers.get('content-type'));
     const shouldReadBody =
       contentType.includes('text/') ||
@@ -1073,7 +1077,7 @@ export async function waitForRailwayDeploymentAfterSourceSync(
     const matchedDeployment = deployments.find((item) => {
       const createdAt = item.createdAt ? Date.parse(item.createdAt) : NaN;
       if (!Number.isFinite(createdAt)) return false;
-      return createdAt >= since - 15_000;
+      return createdAt >= since - 60_000;
     });
 
     if (matchedDeployment?.id) {

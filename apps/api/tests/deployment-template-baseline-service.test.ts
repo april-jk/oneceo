@@ -286,6 +286,112 @@ test('deployment template baseline highlights missing railway database dependenc
   }
 });
 
+test('deployment source normalization skips official shell adaptation when existing server directory is detected', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'oneceo-shell-conflict-server-'));
+  try {
+    await mkdir(join(workspace, 'src'), { recursive: true });
+    await mkdir(join(workspace, 'server'), { recursive: true });
+    await writeFile(
+      join(workspace, 'package.json'),
+      JSON.stringify({
+        name: 'generic-frontend-with-server',
+        scripts: { build: 'vite build', start: 'vite preview' },
+        dependencies: { react: '^19.0.0', 'react-dom': '^19.0.0' },
+        devDependencies: { vite: '^7.0.0' },
+      }),
+      'utf-8'
+    );
+    await writeFile(
+      join(workspace, 'index.html'),
+      '<!doctype html><html><body><div id="root"></div></body></html>',
+      'utf-8'
+    );
+    await writeFile(
+      join(workspace, 'server/custom-api.js'),
+      "app.get('/api/custom', (req, res) => res.json({ ok: true }));\n",
+      'utf-8'
+    );
+
+    const normalization = await normalizeDeploymentSourceDirectoryForPublish(workspace);
+
+    assert.equal(normalization.adaptedOfficialFrontendShell, false);
+    const customApi = await readFile(join(workspace, 'server/custom-api.js'), 'utf-8');
+    assert.match(customApi, /api\/custom/);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test('deployment source normalization skips official shell adaptation when existing client/src directory is detected', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'oneceo-shell-conflict-client-src-'));
+  try {
+    await mkdir(join(workspace, 'client', 'src'), { recursive: true });
+    await writeFile(
+      join(workspace, 'package.json'),
+      JSON.stringify({
+        name: 'generic-frontend-with-client-src',
+        scripts: { build: 'vite build', start: 'vite preview' },
+        dependencies: { react: '^19.0.0', 'react-dom': '^19.0.0' },
+        devDependencies: { vite: '^7.0.0' },
+      }),
+      'utf-8'
+    );
+    await writeFile(
+      join(workspace, 'client/index.html'),
+      '<!doctype html><html><body><div id="root"></div></body></html>',
+      'utf-8'
+    );
+    await writeFile(
+      join(workspace, 'client/src/app.jsx'),
+      'export default function App() { return <div>hello</div>; }\n',
+      'utf-8'
+    );
+
+    const normalization = await normalizeDeploymentSourceDirectoryForPublish(workspace);
+
+    assert.equal(normalization.adaptedOfficialFrontendShell, false);
+    const appJsx = await readFile(join(workspace, 'client/src/app.jsx'), 'utf-8');
+    assert.match(appJsx, /export default function App/);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test('deployment source normalization skips official shell adaptation when existing client/public directory is detected', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'oneceo-shell-conflict-client-public-'));
+  try {
+    await mkdir(join(workspace, 'client', 'public'), { recursive: true });
+    await writeFile(
+      join(workspace, 'package.json'),
+      JSON.stringify({
+        name: 'generic-frontend-with-client-public',
+        scripts: { build: 'vite build', start: 'vite preview' },
+        dependencies: { react: '^19.0.0', 'react-dom': '^19.0.0' },
+        devDependencies: { vite: '^7.0.0' },
+      }),
+      'utf-8'
+    );
+    await writeFile(
+      join(workspace, 'client/index.html'),
+      '<!doctype html><html><body><div id="root"></div></body></html>',
+      'utf-8'
+    );
+    await writeFile(
+      join(workspace, 'client/public/favicon.ico'),
+      'fake-ico-data',
+      'utf-8'
+    );
+
+    const normalization = await normalizeDeploymentSourceDirectoryForPublish(workspace);
+
+    assert.equal(normalization.adaptedOfficialFrontendShell, false);
+    const favicon = await readFile(join(workspace, 'client/public/favicon.ico'), 'utf-8');
+    assert.equal(favicon, 'fake-ico-data');
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
 test('deployment source normalization promotes single nested static app into deployable root baseline', async () => {
   const workspace = await mkdtemp(join(tmpdir(), 'oneceo-baseline-static-test-'));
   try {
